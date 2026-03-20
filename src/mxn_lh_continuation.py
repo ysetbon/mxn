@@ -1071,26 +1071,48 @@ def _build_k_based_strand_sets(m, n, k, direction):
     return set(h_order), h_order, set(v_order), v_order
 
 
+def _normalize_angle_near_reference(angle_deg, ref_angle_deg):
+    """Wrap an angle to the representation closest to the reference angle."""
+    return ref_angle_deg + ((angle_deg - ref_angle_deg + 180.0) % 360.0 - 180.0)
+
+
+def _compute_pair_angle_averages(pair_angles):
+    """Return the uniform and Gaussian-weighted averages for the pair angles."""
+    uniform_avg = sum(pair_angles) / len(pair_angles)
+    num_pairs = len(pair_angles)
+    if num_pairs == 1:
+        return uniform_avg, pair_angles[0]
+
+    sigma = max(num_pairs / 2.0, 1.0)
+    center = num_pairs - 1
+    weights = []
+    for i in range(num_pairs):
+        weights.append(math.exp(-0.5 * ((i - center) / sigma) ** 2))
+
+    total_w = sum(weights)
+    weights = [w / total_w for w in weights]
+    gaussian_avg = sum(angle * weight for angle, weight in zip(pair_angles, weights))
+    return uniform_avg, gaussian_avg
+
+
 def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand"):
     """
     Compute angle range from a sorted list of strand dicts.
 
     Modes:
-        "first_strand" : original method – first strand angle ±20°
-        "uniform"      : average angle across all outside-in pairs (equal weight), ±20°
-        "gaussian"     : weighted average where middle pairs weigh more (Gaussian bell), ±weighted_std (min 10°)
+        "first_strand"           : first strand angle ±20°
+        "avg_gaussian"/"gaussian": use the uniform average and Gaussian average
+                                    as the two bounds of the range
+        "uniform"                : legacy behavior, average angle ±20°
 
     Returns (initial_angle, angle_min, angle_max, pair_angles_debug).
     """
-    # Calculate per-strand angles
     strand_angles = []
     for s in sorted_strands:
         dx = s["target"]["x"] - s["start"]["x"]
         dy = s["target"]["y"] - s["start"]["y"]
-        angle = math.degrees(math.atan2(dy, dx))
-        strand_angles.append(angle)
+        strand_angles.append(math.degrees(math.atan2(dy, dx)))
 
-    # Build outside-in pairs: (0, N-1), (1, N-2), ...
     num = len(sorted_strands)
     pairs = []
     for i in range(num // 2):
@@ -1098,82 +1120,45 @@ def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand"):
     if num % 2 == 1:
         pairs.append((num // 2, None))
 
-    # Reference direction = first strand's angle (all pair angles anchored to this)
     ref_angle = strand_angles[0]
-
-    # Compute per-pair angle: use the "positive direction" strand from each pair
-    # (the one aligned with the reference/first strand), since the opposite strand
-    # carries no additional angle info — it's just ~ref + 180°.
     pair_angles = []
     for left_idx, right_idx in pairs:
-        left_angle = strand_angles[left_idx]
+        left_angle = _normalize_angle_near_reference(strand_angles[left_idx], ref_angle)
         if right_idx is not None:
-            right_angle = strand_angles[right_idx]
-            # Pick whichever strand in the pair is aligned with reference direction
-            left_diff = abs((left_angle - ref_angle + 180) % 360 - 180)
-            right_diff = abs((right_angle - ref_angle + 180) % 360 - 180)
-            if left_diff <= right_diff:
-                pair_angle = left_angle
-            else:
-                pair_angle = right_angle
+            right_angle = _normalize_angle_near_reference(strand_angles[right_idx], ref_angle)
+            left_diff = abs(left_angle - ref_angle)
+            right_diff = abs(right_angle - ref_angle)
+            pair_angle = left_angle if left_diff <= right_diff else right_angle
         else:
             pair_angle = left_angle
-            # If solo strand points opposite, flip it
-            diff = abs((pair_angle - ref_angle + 180) % 360 - 180)
-            if diff > 90:
-                pair_angle = pair_angle - 180
+            if abs(pair_angle - ref_angle) > 90:
+                pair_angle -= 180.0
+            pair_angle = _normalize_angle_near_reference(pair_angle, ref_angle)
         pair_angles.append(pair_angle)
 
     pair_debug = list(zip(
-        [sorted_strands[l]["strand"]["layer_name"] for l, _ in pairs],
-        [sorted_strands[r]["strand"]["layer_name"] if r is not None else "solo" for _, r in pairs],
+        [sorted_strands[left]["strand"]["layer_name"] for left, _ in pairs],
+        [sorted_strands[right]["strand"]["layer_name"] if right is not None else "solo" for _, right in pairs],
         pair_angles
     ))
 
     if angle_mode == "first_strand":
-        initial_angle = strand_angles[0]
-        return initial_angle, initial_angle - 20, initial_angle + 20, pair_debug
+        initial_angle = ref_angle
+        return initial_angle, initial_angle - 20.0, initial_angle + 20.0, pair_debug
 
-    elif angle_mode == "uniform":
-        # All pairs contribute equally
-        avg_angle = sum(pair_angles) / len(pair_angles)
-        return avg_angle, avg_angle - 20, avg_angle + 20, pair_debug
+    uniform_avg, gaussian_avg = _compute_pair_angle_averages(pair_angles)
 
-    elif angle_mode == "gaussian":
-        # Middle pairs (last in list) get highest weight, outer pairs (first) get lowest
-        num_pairs = len(pair_angles)
-        if num_pairs == 1:
-            avg_angle = pair_angles[0]
-            return avg_angle, avg_angle - 20, avg_angle + 20, pair_debug
+    if angle_mode == "uniform":
+        return uniform_avg, uniform_avg - 20.0, uniform_avg + 20.0, pair_debug
 
-        # Pair index 0 = outermost, last = innermost (middle)
-        # Gaussian centered at the last pair index (middle), sigma = num_pairs / 2
-        sigma = max(num_pairs / 2.0, 1.0)
-        center = num_pairs - 1  # middle pair index
-        weights = []
-        for i in range(num_pairs):
-            w = math.exp(-0.5 * ((i - center) / sigma) ** 2)
-            weights.append(w)
+    if angle_mode in ("avg_gaussian", "gaussian"):
+        angle_min = min(uniform_avg, gaussian_avg)
+        angle_max = max(uniform_avg, gaussian_avg)
+        initial_angle = (uniform_avg + gaussian_avg) / 2.0
+        return initial_angle, angle_min, angle_max, pair_debug
 
-        total_w = sum(weights)
-        weights = [w / total_w for w in weights]
-
-        weighted_avg = sum(a * w for a, w in zip(pair_angles, weights))
-        weighted_var = sum(w * (a - weighted_avg) ** 2 for a, w in zip(pair_angles, weights))
-        weighted_std = math.sqrt(weighted_var)
-
-        # Range = ±max(weighted_std * 2, 10°) to ensure a minimum search window
-        half_range = max(weighted_std * 2, 10.0)
-
-        print(f"    Gaussian weights: {['%.3f' % w for w in weights]}")
-        print(f"    Pair angles: {['%.1f' % a for a in pair_angles]}")
-        print(f"    Weighted avg: {weighted_avg:.1f}°, std: {weighted_std:.1f}°, half_range: {half_range:.1f}°")
-
-        return weighted_avg, weighted_avg - half_range, weighted_avg + half_range, pair_debug
-
-    # Fallback
-    initial_angle = strand_angles[0]
-    return initial_angle, initial_angle - 20, initial_angle + 20, pair_debug
+    initial_angle = ref_angle
+    return initial_angle, initial_angle - 20.0, initial_angle + 20.0, pair_debug
 
 
 def get_parallel_alignment_preview(all_strands, n, m, k=0, direction="cw", angle_mode="first_strand"):
@@ -1181,7 +1166,7 @@ def get_parallel_alignment_preview(all_strands, n, m, k=0, direction="cw", angle
     Get preview information for parallel alignment angle ranges.
     Returns first/last strand positions and default angle ranges for both H and V.
 
-    angle_mode: "first_strand" | "uniform" | "gaussian"
+    angle_mode: "first_strand" | "avg_gaussian"
 
     Returns:
         dict with:
@@ -1317,6 +1302,7 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
                                first_strand, ext_range_values, angle_step_degrees,
                                max_extension, strand_width,
                                custom_angle_min, custom_angle_max,
+                               angle_mode="first_strand",
                                on_config_callback=None,
                                chunk_size=2048,
                                direction_type="horizontal"):
@@ -1367,12 +1353,16 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
 
     # Map strand objects to their index in strands_list
     strand_id_map = {id(s): i for i, s in enumerate(strands_list)}
+    pair_left_idx = []
+    pair_right_idx = []
+    pair_has_right = []
 
     for pair_idx, (left_strand, right_strand) in enumerate(pairs):
         l_nx, l_ny, r_nx, r_ny = pair_directions[pair_idx]
         l_orig, r_orig = pair_originals[pair_idx]
 
         left_si = strand_id_map.get(id(left_strand))
+        pair_left_idx.append(left_si if left_si is not None else -1)
         if left_si is not None:
             strand_pair_idx[left_si] = pair_idx
             strand_pair_orig_x[left_si] = l_orig["x"]
@@ -1382,12 +1372,17 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
 
         if right_strand is not None:
             right_si = strand_id_map.get(id(right_strand))
+            pair_right_idx.append(right_si if right_si is not None else -1)
+            pair_has_right.append(True)
             if right_si is not None:
                 strand_pair_idx[right_si] = pair_idx
                 strand_pair_orig_x[right_si] = r_orig["x"]
                 strand_pair_orig_y[right_si] = r_orig["y"]
                 strand_pair_dir_nx[right_si] = r_nx
                 strand_pair_dir_ny[right_si] = r_ny
+        else:
+            pair_right_idx.append(-1)
+            pair_has_right.append(False)
 
     # --- Transfer constants to GPU ---
     tgt_x_gpu = cp.asarray(tgt_x)
@@ -1407,13 +1402,26 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
 
     use_custom = custom_angle_min is not None and custom_angle_max is not None
     if use_custom:
-        delta_deg_cpu = np.arange(custom_angle_min, custom_angle_max + angle_step_degrees / 2,
-                                  angle_step_degrees, dtype=np.float32)
+        angle_values_cpu = np.arange(
+            custom_angle_min,
+            custom_angle_max + angle_step_degrees / 2,
+            angle_step_degrees,
+            dtype=np.float32,
+        )
+        angle_values_gpu = cp.asarray(angle_values_cpu)
     else:
-        delta_deg_cpu = np.arange(-10.0, 10.0 + angle_step_degrees / 2,
-                                  angle_step_degrees, dtype=np.float32)
-    A = len(delta_deg_cpu)
-    delta_rad_gpu = cp.asarray(np.deg2rad(delta_deg_cpu).astype(np.float32))
+        angle_values_cpu = None
+        angle_values_gpu = None
+    gaussian_weights_gpu = None
+    if P > 1:
+        sigma = max(P / 2.0, 1.0)
+        center = P - 1
+        gaussian_weights_cpu = np.array(
+            [math.exp(-0.5 * ((i - center) / sigma) ** 2) for i in range(P)],
+            dtype=np.float32,
+        )
+        gaussian_weights_cpu /= gaussian_weights_cpu.sum()
+        gaussian_weights_gpu = cp.asarray(gaussian_weights_cpu)
 
     # Sign flip for alternating gap indices
     sign_flip_cpu = np.ones(max(S - 1, 1), dtype=np.float32)
@@ -1427,7 +1435,7 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
     first_strand_idx = 0  # first strand in strands_list
 
     print(f"\n--- GPU chunked search: {total_combos} combos, chunk_size={chunk_size}, "
-          f"S={S}, E={E}, A={A} ---")
+          f"S={S}, E={E}, angle_mode={angle_mode} ---")
 
     for chunk_start in range(0, total_combos, chunk_size):
         chunk_end = min(chunk_start + chunk_size, total_combos)
@@ -1448,19 +1456,86 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
         shifted_x = sp_orig_x_gpu[None, :] + pair_ext_per_strand * sp_dir_nx_gpu[None, :]  # (C, S)
         shifted_y = sp_orig_y_gpu[None, :] + pair_ext_per_strand * sp_dir_ny_gpu[None, :]
 
-        # --- Step 3: Base angles per combo ---
+        # --- Step 3: Base angles and search ranges per combo ---
         first_dx = tgt_x_gpu[first_strand_idx] - shifted_x[:, first_strand_idx]  # (C,)
         first_dy = tgt_y_gpu[first_strand_idx] - shifted_y[:, first_strand_idx]
         base_angle_rad = cp.arctan2(first_dy, first_dx)  # (C,)
+        base_angle_deg = cp.rad2deg(base_angle_rad)
 
-        if use_custom:
-            angles_rad = cp.deg2rad(cp.asarray(delta_deg_cpu, dtype=cp.float32))[None, :] * cp.ones((C, 1), dtype=cp.float32)
-        else:
-            angles_rad = base_angle_rad[:, None] + delta_rad_gpu[None, :]  # (C, A)
-
-        # --- Step 4: goes_positive per combo per strand ---
         dx_to_tgt = tgt_x_gpu[None, :] - shifted_x  # (C, S)
         dy_to_tgt = tgt_y_gpu[None, :] - shifted_y
+
+        if use_custom:
+            angle_min_deg = cp.full((C,), np.float32(custom_angle_min), dtype=cp.float32)
+            angle_max_deg = cp.full((C,), np.float32(custom_angle_max), dtype=cp.float32)
+            A = len(angle_values_cpu)
+            angles_rad = cp.broadcast_to(cp.deg2rad(angle_values_gpu)[None, :], (C, A))
+            angle_range_mask = cp.ones((C, A), dtype=cp.bool_)
+        else:
+            if angle_mode == "first_strand":
+                angle_min_deg = base_angle_deg - np.float32(20.0)
+                angle_max_deg = base_angle_deg + np.float32(20.0)
+            else:
+                strand_angle_deg = cp.rad2deg(cp.arctan2(dy_to_tgt, dx_to_tgt))
+                ref_angle_deg = strand_angle_deg[:, first_strand_idx]
+                pair_angle_columns = []
+                for pair_idx in range(P):
+                    left_angle = ref_angle_deg + cp.mod(
+                        strand_angle_deg[:, pair_left_idx[pair_idx]] - ref_angle_deg + np.float32(180.0),
+                        np.float32(360.0),
+                    ) - np.float32(180.0)
+                    if pair_has_right[pair_idx]:
+                        right_angle = ref_angle_deg + cp.mod(
+                            strand_angle_deg[:, pair_right_idx[pair_idx]] - ref_angle_deg + np.float32(180.0),
+                            np.float32(360.0),
+                        ) - np.float32(180.0)
+                        left_diff = cp.abs(left_angle - ref_angle_deg)
+                        right_diff = cp.abs(right_angle - ref_angle_deg)
+                        pair_angle = cp.where(left_diff <= right_diff, left_angle, right_angle)
+                    else:
+                        pair_angle = cp.where(
+                            cp.abs(left_angle - ref_angle_deg) > np.float32(90.0),
+                            left_angle - np.float32(180.0),
+                            left_angle,
+                        )
+                        pair_angle = ref_angle_deg + cp.mod(
+                            pair_angle - ref_angle_deg + np.float32(180.0),
+                            np.float32(360.0),
+                        ) - np.float32(180.0)
+                    pair_angle_columns.append(pair_angle)
+
+                pair_angles_deg = cp.stack(pair_angle_columns, axis=1)
+                uniform_avg = cp.mean(pair_angles_deg, axis=1)
+
+                if angle_mode == "uniform":
+                    angle_min_deg = uniform_avg - np.float32(20.0)
+                    angle_max_deg = uniform_avg + np.float32(20.0)
+                else:
+                    if P == 1:
+                        gaussian_avg = pair_angles_deg[:, 0]
+                    else:
+                        gaussian_avg = cp.sum(pair_angles_deg * gaussian_weights_gpu[None, :], axis=1)
+                    angle_min_deg = cp.minimum(uniform_avg, gaussian_avg)
+                    angle_max_deg = cp.maximum(uniform_avg, gaussian_avg)
+
+            chunk_angle_min = float(cp.min(angle_min_deg).get())
+            chunk_angle_max = float(cp.max(angle_max_deg).get())
+            angle_values_cpu = np.arange(
+                chunk_angle_min,
+                chunk_angle_max + angle_step_degrees / 2,
+                angle_step_degrees,
+                dtype=np.float32,
+            )
+            angle_values_gpu = cp.asarray(angle_values_cpu)
+            A = len(angle_values_cpu)
+            angles_rad = cp.broadcast_to(cp.deg2rad(angle_values_gpu)[None, :], (C, A))
+            angle_range_mask = (
+                angle_values_gpu[None, :] >= angle_min_deg[:, None] - np.float32(1e-4)
+            ) & (
+                angle_values_gpu[None, :] <= angle_max_deg[:, None] + np.float32(1e-4)
+            )
+
+        # --- Step 4: goes_positive per combo per strand ---
         ref_cos = cp.cos(base_angle_rad)[:, None]
         ref_sin = cp.sin(base_angle_rad)[:, None]
         goes_positive = (dx_to_tgt * ref_cos + dy_to_tgt * ref_sin) >= 0  # (C, S)
@@ -1488,7 +1563,7 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
         # --- Step 7: First valid extension per (c, s, a) ---
         valid_proj = proj > 10
         has_any_valid = cp.any(valid_proj, axis=2)  # (C, S, A)
-        all_strands_valid = cp.all(has_any_valid, axis=1)  # (C, A)
+        all_strands_valid = cp.all(has_any_valid, axis=1) & angle_range_mask  # (C, A)
         first_valid_ext_idx = cp.argmax(valid_proj.astype(cp.int8), axis=2)  # (C, S, A)
 
         if S == 2:
@@ -1498,7 +1573,7 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
                 ext_starts_x, ext_starts_y, proj, cos_sa, sin_sa,
                 inner_ext_gpu, inner_ext_cpu, combo_ext,
                 min_gap, max_gap_val, strand_width,
-                goes_positive, angles_rad,
+                goes_positive, angles_rad, angle_range_mask, angle_min_deg, angle_max_deg,
                 strands_list, pairs, pair_directions, pair_originals,
                 all_valid_results, on_config_callback, direction_type,
                 chunk_start, total_combos,
@@ -1739,7 +1814,7 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
                          ext_starts_x, ext_starts_y, proj, cos_sa, sin_sa,
                          inner_ext_gpu, inner_ext_cpu, combo_ext,
                          min_gap, max_gap_val, strand_width,
-                         goes_positive, angles_rad,
+                         goes_positive, angles_rad, angle_range_mask, angle_min_deg, angle_max_deg,
                          strands_list, pairs, pair_directions, pair_originals,
                          all_valid_results, on_config_callback, direction_type,
                          chunk_start, total_combos):
@@ -1789,6 +1864,7 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
     # Validity: both exts valid, line valid, gap in range
     valid_2s = (valid_e1[:, :, None, :] & valid_e2[:, None, :, :] &
                 valid_ll1[:, :, None, :] &
+                angle_range_mask[:, None, None, :] &
                 (gap_matrix >= min_gap) & (gap_matrix <= max_gap_val))
 
     # Find smallest gap per combo (flatten E1, E2, A)
@@ -1809,6 +1885,8 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
     combo_ext_cpu = combo_ext.get()
     goes_pos_cpu = goes_positive.get()
     angles_rad_cpu = angles_rad.get()
+    angle_min_cpu = angle_min_deg.get()
+    angle_max_cpu = angle_max_deg.get()
     shifted_x_cpu = ext_starts_x[:, :, 0].get()
     shifted_y_cpu = ext_starts_y[:, :, 0].get()
 
@@ -1875,12 +1953,12 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
     if len(invalid_combo_indices) == 0:
         return None
 
-    mid_a = A // 2
     best_fallback_info = None
     best_fallback_gap = -float('inf')
 
     for ic in invalid_combo_indices:
-        angle_rad_val = float(angles_rad_cpu[ic, mid_a])
+        angle_deg_val = 0.5 * float(angle_min_cpu[ic] + angle_max_cpu[ic])
+        angle_rad_val = math.radians(angle_deg_val)
         pair_exts = tuple(int(combo_ext_cpu[ic, p]) for p in range(P))
 
         original_start_1 = {
@@ -1934,7 +2012,7 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
                 "average_gap": abs_gap,
                 "worst_gap": abs_gap,
                 "angle": angle_rad_val,
-                "angle_degrees": float(np.degrees(angle_rad_val)),
+                "angle_degrees": angle_deg_val,
                 "min_gap": min_gap,
                 "max_gap": max_gap_val,
                 "pair_extensions": pair_exts,
@@ -2381,7 +2459,7 @@ def align_horizontal_strands_parallel(all_strands, n,
     Parallel alignment of horizontal _4/_5 strands using first-last pair approach.
 
     Algorithm:
-    1. Calculate angle range: first strand's initial angle ±20° (or use custom range)
+    1. Calculate angle range from the selected auto mode (or use custom range)
     2. LAST strand should use angle + 180° (opposite direction)
     3. For each angle in range, check if first and last can reach their targets
     4. Then check if MIDDLE strands can adapt (with extensions if needed)
@@ -2601,6 +2679,7 @@ def align_horizontal_strands_parallel(all_strands, n,
             max_extension, strand_width,
             custom_angle_min if use_custom_h else None,
             custom_angle_max if use_custom_h else None,
+            angle_mode=angle_mode,
             on_config_callback=on_config_callback,
             chunk_size=2048,
             direction_type="horizontal",
@@ -2769,7 +2848,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
     Parallel alignment of vertical _4/_5 strands using first-last pair approach.
 
     Algorithm:
-    1. Calculate angle range: first strand's initial angle ±20° (or use custom range)
+    1. Calculate angle range from the selected auto mode (or use custom range)
     2. LAST strand should use angle + 180° (opposite direction)
     3. For each angle in range, check if first and last can reach their targets
     4. Then check if MIDDLE strands can adapt (with extensions if needed)
@@ -2997,6 +3076,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
             max_extension, strand_width,
             custom_angle_min if use_custom_v else None,
             custom_angle_max if use_custom_v else None,
+            angle_mode=angle_mode,
             on_config_callback=on_config_callback,
             chunk_size=2048,
             direction_type="vertical",

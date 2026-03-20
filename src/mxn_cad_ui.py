@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import copy
+import math
 import random
 import colorsys
 import hashlib
@@ -778,12 +779,11 @@ class MxNGeneratorDialog(QDialog):
         angle_mode_layout.addWidget(QLabel("Mode:"))
         self.angle_mode_combo = QComboBox()
         self.angle_mode_combo.addItem("First strand ±20°", "first_strand")
-        self.angle_mode_combo.addItem("Uniform (all pairs)", "uniform")
-        self.angle_mode_combo.addItem("Gaussian (mid-pair weighted)", "gaussian")
+        self.angle_mode_combo.addItem("Average ↔ Gaussian bounds", "avg_gaussian")
         self.angle_mode_combo.setToolTip(
             "First strand: original method (first strand angle ±20°)\n"
-            "Uniform: average angle of all pairs, equal weight\n"
-            "Gaussian: weighted average, middle pairs most significant"
+            "Average ↔ Gaussian: use the uniform average angle and Gaussian-weighted\n"
+            "average angle as the two ends of the search range"
         )
         self.angle_mode_combo.currentIndexChanged.connect(self._on_angle_mode_changed)
         angle_mode_layout.addWidget(self.angle_mode_combo)
@@ -1878,8 +1878,8 @@ class MxNGeneratorDialog(QDialog):
             # Update spin boxes with detected angles
             if preview_data["horizontal"]:
                 h_data = preview_data["horizontal"]
-                self.h_angle_min_spin.setValue(int(h_data["angle_min"]))
-                self.h_angle_max_spin.setValue(int(h_data["angle_max"]))
+                self.h_angle_min_spin.setValue(math.floor(h_data["angle_min"]))
+                self.h_angle_max_spin.setValue(math.ceil(h_data["angle_max"]))
                 print(f"Horizontal order: {h_data.get('strand_order', [])}")
                 print(f"  First: {h_data['first_name']}, Last: {h_data['last_name']}")
                 print(f"  Initial angle: {h_data['initial_angle']:.1f}°")
@@ -1887,8 +1887,8 @@ class MxNGeneratorDialog(QDialog):
 
             if preview_data["vertical"]:
                 v_data = preview_data["vertical"]
-                self.v_angle_min_spin.setValue(int(v_data["angle_min"]))
-                self.v_angle_max_spin.setValue(int(v_data["angle_max"]))
+                self.v_angle_min_spin.setValue(math.floor(v_data["angle_min"]))
+                self.v_angle_max_spin.setValue(math.ceil(v_data["angle_max"]))
                 print(f"Vertical order: {v_data.get('strand_order', [])}")
                 print(f"  First: {v_data['first_name']}, Last: {v_data['last_name']}")
                 print(f"  Initial angle: {v_data['initial_angle']:.1f}°")
