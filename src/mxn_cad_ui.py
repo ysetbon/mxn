@@ -785,6 +785,7 @@ class MxNGeneratorDialog(QDialog):
             "Uniform: average angle of all pairs, equal weight\n"
             "Gaussian: weighted average, middle pairs most significant"
         )
+        self.angle_mode_combo.currentIndexChanged.connect(self._on_angle_mode_changed)
         angle_mode_layout.addWidget(self.angle_mode_combo)
         angle_layout.addLayout(angle_mode_layout)
 
@@ -1839,6 +1840,11 @@ class MxNGeneratorDialog(QDialog):
             import traceback
             traceback.print_exc()
             self.status_label.setText(f"Extension error: {str(e)}")
+
+    def _on_angle_mode_changed(self):
+        """Re-run preview when angle mode dropdown changes."""
+        if self.current_json_data and self.preview_angles_btn.isEnabled():
+            self.preview_angle_ranges()
 
     def preview_angle_ranges(self):
         """Preview the angle ranges for parallel alignment with dotted lines."""
