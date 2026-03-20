@@ -1098,22 +1098,30 @@ def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand"):
     if num % 2 == 1:
         pairs.append((num // 2, None))
 
-    # Compute per-pair angle (normalize the "opposite" strand by +180°, then average)
+    # Reference direction = first strand's angle (all pair angles anchored to this)
+    ref_angle = strand_angles[0]
+
+    # Compute per-pair angle: use the "positive direction" strand from each pair
+    # (the one aligned with the reference/first strand), since the opposite strand
+    # carries no additional angle info — it's just ~ref + 180°.
     pair_angles = []
     for left_idx, right_idx in pairs:
         left_angle = strand_angles[left_idx]
         if right_idx is not None:
             right_angle = strand_angles[right_idx]
-            # The right strand points ~opposite, so normalize
-            diff = (right_angle - left_angle + 180) % 360 - 180
-            # If |diff| > 90 it's pointing opposite as expected
-            if abs(diff) > 90:
-                right_normalized = right_angle - 180
+            # Pick whichever strand in the pair is aligned with reference direction
+            left_diff = abs((left_angle - ref_angle + 180) % 360 - 180)
+            right_diff = abs((right_angle - ref_angle + 180) % 360 - 180)
+            if left_diff <= right_diff:
+                pair_angle = left_angle
             else:
-                right_normalized = right_angle
-            pair_angle = (left_angle + right_normalized) / 2.0
+                pair_angle = right_angle
         else:
             pair_angle = left_angle
+            # If solo strand points opposite, flip it
+            diff = abs((pair_angle - ref_angle + 180) % 360 - 180)
+            if diff > 90:
+                pair_angle = pair_angle - 180
         pair_angles.append(pair_angle)
 
     pair_debug = list(zip(
