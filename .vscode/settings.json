@@ -1,0 +1,10 @@
+{
+    "git.ignoreLimitWarning": true,
+    "python.defaultInterpreterPath": "C:/ProgramData/Anaconda3/python.exe",
+    "python.terminal.activateEnvironment": false,
+    "python.terminal.activateEnvInCurrentTerminal": false,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/openstrandstudio/src",
+        "${workspaceFolder}/src"
+    ]
+}

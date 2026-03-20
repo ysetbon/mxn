@@ -1,0 +1,48 @@
+Pattern: RH 2x3 k=2 cw
+Result: SOLUTION
+============================================================
+
+HORIZONTAL ALIGNMENT
+----------------------------------------
+Status: SUCCESS
+Angle: -140.50°
+Average gap: 59.02 px
+Gap variance: 0.044941425246447245
+First-last distance: 295.09795189970697
+Pair extensions: (70, 0, 20)
+  2_5: extension=0.0px, length=319.3px
+  4_5: extension=0.0px, length=340.7px
+  3_5: extension=0.0px, length=399.1px
+  1_4: extension=0.0px, length=399.1px
+  5_4: extension=0.0px, length=340.7px
+  2_4: extension=0.0px, length=319.3px
+
+VERTICAL ALIGNMENT
+----------------------------------------
+Status: SUCCESS
+Angle: 126.00°
+Average gap: 57.00 px
+Gap variance: 1.460020511921437
+First-last distance: 171.00002115863296
+Pair extensions: (0, 10)
+  5_5: extension=0.0px, length=354.0px
+  3_4: extension=0.0px, length=435.6px
+  1_5: extension=0.0px, length=435.6px
+  4_4: extension=0.0px, length=354.0px
+
+HORIZONTAL REFERENCE (for vertical context)
+----------------------------------------
+H angle: -140.50°
+H gap: 59.02 px
+H success: True
+
+PARAMETERS
+----------------------------------------
+H angle range: -159° to -122°
+V angle range: 103° to 138°
+Custom angles: True
+Pair ext max: 200px
+Pair ext step: 10px
+Max extension: 100.0px
+Angle step: 0.5°
+Strand width: 46px

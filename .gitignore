@@ -1,0 +1,8 @@
+*.gif
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+nul
+.venv/
+openstrandstudio/
