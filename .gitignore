@@ -7,4 +7,5 @@ nul
 .venv/
 openstrandstudio/
 src/mxn/mxn_output/
+src/mxn/mxn_continueing/
 src/mxn/mxn_presets/*.json
