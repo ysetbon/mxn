@@ -61,7 +61,8 @@ from mxn_lh_continuation import (
     align_vertical_strands_parallel as align_vertical_strands_parallel_lh,
     apply_parallel_alignment as apply_parallel_alignment_lh,
     print_alignment_debug as print_alignment_debug_lh,
-    get_parallel_alignment_preview as get_parallel_alignment_preview_lh
+    get_parallel_alignment_preview as get_parallel_alignment_preview_lh,
+    get_alignment_combo_guard,
 )
 from mxn_rh_continuation import (
     align_horizontal_strands_parallel as align_horizontal_strands_parallel_rh,
@@ -1312,6 +1313,7 @@ class MxNGeneratorDialog(QDialog):
     def _on_gpu_toggle_changed(self, checked):
         """Update backend summary when the GPU checkbox changes."""
         self._update_gpu_status_ui()
+        self._update_calc_count_label()
 
     def setup_ui(self):
         """Setup the main UI layout with image preview."""
@@ -2361,16 +2363,49 @@ class MxNGeneratorDialog(QDialog):
 
             pair_ext_max = self.pair_ext_max_spin.value()
             pair_ext_step = self.pair_ext_step_spin.value()
-            ext_steps = (pair_ext_max // pair_ext_step) + 1 if pair_ext_step > 0 else 1
+            ext_steps = len(range(0, pair_ext_max + pair_ext_step, pair_ext_step)) if pair_ext_step > 0 else 1
 
             h_combos = ext_steps ** h_pairs
             v_combos = ext_steps ** v_pairs
             total = h_combos + v_combos
+            use_gpu = (
+                hasattr(self, 'use_gpu_cb') and
+                self.use_gpu_cb.isEnabled() and
+                self.use_gpu_cb.isChecked()
+            )
 
-            self.calc_count_label.setText(
+            label_lines = [
                 f"Calculations: H={h_combos:,} ({h_count} strands, {h_pairs} pairs) + "
                 f"V={v_combos:,} ({v_count} strands, {v_pairs} pairs) = {total:,} total"
+            ]
+
+            h_guard = get_alignment_combo_guard(
+                h_combos,
+                h_pairs,
+                pair_ext_max,
+                pair_ext_step,
+                use_gpu=use_gpu,
             )
+            v_guard = get_alignment_combo_guard(
+                v_combos,
+                v_pairs,
+                pair_ext_max,
+                pair_ext_step,
+                use_gpu=use_gpu,
+            )
+
+            if h_guard:
+                label_lines.append(
+                    f"CPU guard: H search too large, use Pair ext step >= {h_guard['suggested_step']}px "
+                    f"(~{h_guard['suggested_total_combos']:,} combos)."
+                )
+            if v_guard:
+                label_lines.append(
+                    f"CPU guard: V search too large, use Pair ext step >= {v_guard['suggested_step']}px "
+                    f"(~{v_guard['suggested_total_combos']:,} combos)."
+                )
+
+            self.calc_count_label.setText("\n".join(label_lines))
         except Exception:
             self.calc_count_label.setText("")
 

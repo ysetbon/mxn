@@ -13,11 +13,15 @@ Usage:
     json_content = generate_json(m=2, n=2, k=0, direction="cw")
 """
 
+import copy
 import json
+import itertools
 import os
 import sys
 import random
+import time
 import colorsys
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 
 # Emoji names matching the order in mxn_emoji_renderer.get_animal_pool()
 EMOJI_NAMES = [
@@ -50,6 +54,7 @@ __all__ = [
     "align_vertical_strands_parallel",
     "apply_parallel_alignment",
     "print_alignment_debug",
+    "get_alignment_combo_guard",
 ]
 
 
@@ -1335,7 +1340,8 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
                                angle_mode="first_strand",
                                on_config_callback=None,
                                chunk_size=2048,
-                               direction_type="horizontal"):
+                               direction_type="horizontal",
+                               allow_inner_extensions=True):
     """
     GPU-accelerated combo search using CuPy.  Replaces the itertools.product
     loop, processing *chunk_size* extension combos at a time on the GPU.
@@ -1426,7 +1432,10 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
     sp_dir_ny_gpu = cp.asarray(strand_pair_dir_ny)
 
     ext_range_gpu = cp.asarray(np.array(ext_range_values, dtype=np.float32))
-    inner_ext_cpu = np.arange(0, max_extension + 1, 5, dtype=np.float32)
+    if allow_inner_extensions:
+        inner_ext_cpu = np.arange(0, max_extension + 1, 5, dtype=np.float32)
+    else:
+        inner_ext_cpu = np.array([0.0], dtype=np.float32)
     inner_ext_gpu = cp.asarray(inner_ext_cpu)
     E = len(inner_ext_cpu)
 
@@ -2052,7 +2061,7 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
     return best_fallback_info
 
 
-def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width):
+def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width, allow_inner_extensions=True):
     """
     Numpy-accelerated batch angle search. Tests ALL angles at once for a given
     set of strand start positions.
@@ -2118,7 +2127,10 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width)
     sin_sa = np.sin(strand_angles)
 
     # Inner extension range
-    inner_ext = np.arange(0, max_extension + 1, 5, dtype=np.float64)
+    if allow_inner_extensions:
+        inner_ext = np.arange(0, max_extension + 1, 5, dtype=np.float64)
+    else:
+        inner_ext = np.array([0.0], dtype=np.float64)
     num_ext = len(inner_ext)
 
     # Extended starts for all (strand, extension): (num_strands, num_ext)
@@ -2475,6 +2487,506 @@ def _build_config_dict(h_strand, extension, angle_rad, goes_positive, original_s
     }
 
 
+def _clone_alignment_strands(strands_list):
+    """Clone only the mutable per-strand geometry needed for combo search."""
+    clones = []
+    for strand in strands_list:
+        clones.append({
+            "strand_4_5": strand["strand_4_5"],
+            "strand_2_3": strand["strand_2_3"],
+            "type": strand["type"],
+            "set_number": strand["set_number"],
+            "original_start": {
+                "x": strand["original_start"]["x"],
+                "y": strand["original_start"]["y"],
+            },
+            "target_position": {
+                "x": strand["target_position"]["x"],
+                "y": strand["target_position"]["y"],
+            },
+        })
+    return clones
+
+
+def _encode_pair_indices(strands_list, pairs):
+    """Replace direct strand references with integer indices for worker transport."""
+    strand_id_map = {id(strand): idx for idx, strand in enumerate(strands_list)}
+    pair_indices = []
+    for left_strand, right_strand in pairs:
+        pair_indices.append((
+            strand_id_map[id(left_strand)],
+            strand_id_map[id(right_strand)] if right_strand is not None else None,
+        ))
+    return pair_indices
+
+
+def _decode_combo_index(combo_index, ext_range_values, num_pairs):
+    """Decode an itertools.product-style combo index into per-pair extensions."""
+    if num_pairs <= 0:
+        return ()
+
+    radix = len(ext_range_values)
+    combo = [ext_range_values[0]] * num_pairs
+    value = combo_index
+    for pair_idx in range(num_pairs - 1, -1, -1):
+        combo[pair_idx] = ext_range_values[value % radix]
+        value //= radix
+    return tuple(combo)
+
+
+def _build_angle_values(angle_min_deg, angle_max_deg, angle_step_degrees):
+    """Build the same 0.01-degree stepped angle grid used by the serial CPU path."""
+    step = max(1, int(angle_step_degrees * 100))
+    angle_start = int(angle_min_deg * 100)
+    angle_end = int(angle_max_deg * 100)
+    return [h / 100.0 for h in range(angle_start, angle_end + 1, step)]
+
+
+def _format_progress_duration(seconds):
+    """Format elapsed/remaining time for terminal progress output."""
+    total_seconds = max(0, int(seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _print_terminal_progress(label, completed, total, start_time, valid_count=0, final=False):
+    """Print a single-line terminal progress bar with ETA."""
+    safe_total = max(total, 1)
+    bounded_completed = max(0, min(completed, safe_total))
+    fraction = bounded_completed / safe_total
+
+    elapsed = max(time.perf_counter() - start_time, 0.0)
+    rate = bounded_completed / elapsed if elapsed > 1e-9 else 0.0
+    remaining = max(safe_total - bounded_completed, 0)
+    eta_seconds = remaining / rate if rate > 1e-9 else 0.0
+
+    bar_width = 28
+    filled = min(bar_width, int(bar_width * fraction))
+    bar = "#" * filled + "-" * (bar_width - filled)
+
+    line = (
+        f"\r  {label} [{bar}] {bounded_completed:,}/{safe_total:,} "
+        f"({fraction * 100:5.1f}%) | elapsed {_format_progress_duration(elapsed)} "
+        f"| eta {_format_progress_duration(eta_seconds)} | valid {valid_count:,}"
+    )
+    sys.stdout.write(line + " " * 8)
+    if final:
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _evaluate_cpu_combo_chunk(task):
+    """
+    Evaluate a contiguous range of combo indices using the existing CPU search logic.
+
+    This keeps the validity math unchanged; the only difference is that multiple
+    combo ranges can now run in parallel worker processes.
+    """
+    (
+        strands_list,
+        pair_indices,
+        pair_directions,
+        pair_originals,
+        ext_range_values,
+        combo_start,
+        combo_end,
+        angle_step_degrees,
+        max_extension,
+        strand_width,
+        custom_angle_min,
+        custom_angle_max,
+        angle_mode,
+    ) = task
+
+    working_strands = _clone_alignment_strands(strands_list)
+    use_custom = custom_angle_min is not None and custom_angle_max is not None
+
+    valid_results = []
+    best_fallback = None
+    best_fallback_worst_gap = -float("inf")
+    best_fallback_extensions = tuple(0 for _ in pair_indices)
+    best_fallback_angle = 0.0
+
+    for combo_index in range(combo_start, combo_end):
+        combo = _decode_combo_index(combo_index, ext_range_values, len(pair_indices))
+
+        for pair_idx, (left_idx, right_idx) in enumerate(pair_indices):
+            ext = combo[pair_idx]
+            l_nx, l_ny, r_nx, r_ny = pair_directions[pair_idx]
+            l_orig, r_orig = pair_originals[pair_idx]
+
+            left_strand = working_strands[left_idx]
+            left_strand["original_start"]["x"] = l_orig["x"] + ext * l_nx
+            left_strand["original_start"]["y"] = l_orig["y"] + ext * l_ny
+
+            if right_idx is not None and r_orig is not None:
+                right_strand = working_strands[right_idx]
+                right_strand["original_start"]["x"] = r_orig["x"] + ext * r_nx
+                right_strand["original_start"]["y"] = r_orig["y"] + ext * r_ny
+
+        if use_custom:
+            angle_min_deg = custom_angle_min
+            angle_max_deg = custom_angle_max
+        else:
+            adapted = [
+                {
+                    "strand": strand["strand_4_5"],
+                    "start": strand["original_start"],
+                    "target": strand["target_position"],
+                }
+                for strand in working_strands
+            ]
+            _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(adapted, angle_mode)
+
+        angles_deg_list = _build_angle_values(angle_min_deg, angle_max_deg, angle_step_degrees)
+        np_result = _numpy_try_all_angles(
+            working_strands,
+            angles_deg_list,
+            max_extension,
+            strand_width,
+            allow_inner_extensions=False,
+        )
+
+        if np_result and np_result.get("valid"):
+            stored_result = copy.deepcopy(np_result)
+            stored_result["pair_extensions"] = combo
+            stored_result["combo_index"] = combo_index
+            valid_results.append(stored_result)
+            continue
+
+        fallback_result = try_angle_configuration_first_last(
+            working_strands,
+            math.radians(angles_deg_list[len(angles_deg_list) // 2]) if angles_deg_list else 0,
+            max_extension,
+            strand_width,
+            verbose=False,
+            allow_inner_extensions=False,
+        )
+        fallback = fallback_result.get("fallback")
+        if fallback and fallback_result.get("directions_valid", False):
+            worst_gap = fallback.get("worst_gap", 0)
+            if worst_gap > best_fallback_worst_gap:
+                best_fallback_worst_gap = worst_gap
+                best_fallback = copy.deepcopy(fallback)
+                best_fallback_extensions = combo
+                best_fallback_angle = fallback_result.get(
+                    "angle_degrees",
+                    angles_deg_list[len(angles_deg_list) // 2] if angles_deg_list else 0,
+                )
+
+    return {
+        "chunk_start": combo_start,
+        "chunk_end": combo_end,
+        "valid_results": valid_results,
+        "best_fallback": best_fallback,
+        "best_fallback_worst_gap": best_fallback_worst_gap,
+        "best_fallback_extensions": best_fallback_extensions,
+        "best_fallback_angle": best_fallback_angle,
+    }
+
+
+def _get_cpu_worker_count(total_combos):
+    """Choose a conservative default worker count, with env override for tuning."""
+    env_value = os.environ.get("MXN_ALIGNMENT_CPU_WORKERS")
+    if env_value:
+        try:
+            requested = int(env_value)
+            if requested > 0:
+                return min(requested, max(total_combos, 1))
+        except ValueError:
+            pass
+
+    cpu_total = os.cpu_count() or 1
+    if cpu_total <= 1 or total_combos < 2:
+        return 1
+
+    return min(max(cpu_total - 1, 1), total_combos, 8)
+
+
+def _get_cpu_chunk_size(total_combos, worker_count):
+    """Pick a chunk size that amortizes spawn overhead without delaying ordered saves too much."""
+    env_value = os.environ.get("MXN_ALIGNMENT_CPU_CHUNK_SIZE")
+    if env_value:
+        try:
+            requested = int(env_value)
+            if requested > 0:
+                return min(requested, max(total_combos, 1))
+        except ValueError:
+            pass
+
+    target_chunks = max(worker_count * 4, 1)
+    adaptive = total_combos // target_chunks if total_combos > 0 else 1
+    return max(16, min(256, adaptive if adaptive > 0 else 16))
+
+
+def _get_alignment_combo_limit(use_gpu=False):
+    """
+    Return the maximum allowed pair-extension combo count for the selected backend.
+
+    Set MXN_ALIGNMENT_MAX_CPU_COMBOS or MXN_ALIGNMENT_MAX_GPU_COMBOS to a
+    positive integer to override. Set either variable to 0 or a negative value
+    to disable the guard for that backend.
+    """
+    env_name = "MXN_ALIGNMENT_MAX_GPU_COMBOS" if use_gpu else "MXN_ALIGNMENT_MAX_CPU_COMBOS"
+    default_limit = 0 if use_gpu else 10_000_000
+    env_value = os.environ.get(env_name)
+    if env_value:
+        try:
+            requested = int(env_value)
+            return requested if requested > 0 else None
+        except ValueError:
+            pass
+    return default_limit if default_limit > 0 else None
+
+
+def _count_pair_extension_values(max_pair_extension, pair_extension_step):
+    """Return the number of pair-extension values generated by the outer search loop."""
+    if pair_extension_step <= 0:
+        return 1
+    return len(range(0, max_pair_extension + pair_extension_step, pair_extension_step))
+
+
+def _suggest_pair_extension_step(max_pair_extension, num_pairs, combo_limit):
+    """Suggest the smallest pair-extension step that keeps the combo count under the limit."""
+    if num_pairs <= 0 or combo_limit is None:
+        return 1
+    if max_pair_extension <= 0:
+        return 1
+
+    suggested_step = 1
+    while True:
+        ext_steps = _count_pair_extension_values(max_pair_extension, suggested_step)
+        if ext_steps ** num_pairs <= combo_limit:
+            return suggested_step
+        suggested_step += 1
+
+
+def get_alignment_combo_guard(total_combos, num_pairs, max_pair_extension, pair_extension_step, use_gpu=False):
+    """
+    Return guard metadata when a pair-extension search space is too large.
+
+    Returns None when the search should proceed.
+    """
+    combo_limit = _get_alignment_combo_limit(use_gpu=use_gpu)
+    if combo_limit is None or total_combos <= combo_limit:
+        return None
+
+    suggested_step = _suggest_pair_extension_step(max_pair_extension, num_pairs, combo_limit)
+    suggested_ext_steps = _count_pair_extension_values(max_pair_extension, suggested_step)
+    suggested_total_combos = suggested_ext_steps ** max(num_pairs, 0)
+    backend_label = "GPU" if use_gpu else "CPU"
+
+    message = (
+        f"{backend_label} search skipped: {total_combos:,} pair-extension combos exceeds "
+        f"the {backend_label} limit of {combo_limit:,}. "
+        f"Increase Pair ext step to at least {suggested_step}px or lower Pair ext max."
+    )
+    if suggested_step != pair_extension_step:
+        message += f" At {suggested_step}px, the search drops to about {suggested_total_combos:,} combos."
+
+    return {
+        "limit": combo_limit,
+        "suggested_step": suggested_step,
+        "suggested_total_combos": suggested_total_combos,
+        "message": message,
+    }
+
+
+def _search_combo_space_cpu(
+    strands_list,
+    pairs,
+    pair_directions,
+    pair_originals,
+    ext_range_values,
+    angle_step_degrees,
+    max_extension,
+    strand_width,
+    custom_angle_min,
+    custom_angle_max,
+    angle_mode,
+    on_config_callback=None,
+    direction_type="horizontal",
+):
+    """
+    Search the CPU combo space while preserving the existing validity rules and
+    callback order. Valid results are still emitted in original combo order.
+    """
+    total_combos = len(ext_range_values) ** len(pairs)
+    worker_count = _get_cpu_worker_count(total_combos)
+    chunk_size = _get_cpu_chunk_size(total_combos, worker_count)
+    pair_indices = _encode_pair_indices(strands_list, pairs)
+
+    all_valid_results = []
+    best_fallback = None
+    best_fallback_worst_gap = -float("inf")
+    best_fallback_extensions = tuple(0 for _ in pairs)
+    best_fallback_angle = 0.0
+    completed_combos = 0
+    valid_count = 0
+    progress_start_time = time.perf_counter()
+    last_progress_time = 0.0
+    last_progress_completed = -1
+    last_progress_was_final = False
+    show_progress = total_combos >= chunk_size
+
+    def report_progress(force=False, final=False):
+        nonlocal last_progress_time, last_progress_completed, last_progress_was_final
+        if not show_progress:
+            return
+        if final and completed_combos == total_combos and last_progress_completed == completed_combos:
+            if not last_progress_was_final:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                last_progress_was_final = True
+            return
+        now = time.perf_counter()
+        if not force and (now - last_progress_time) < 0.5 and completed_combos < total_combos:
+            return
+        _print_terminal_progress(
+            f"{direction_type.capitalize()} CPU",
+            completed_combos,
+            total_combos,
+            progress_start_time,
+            valid_count=valid_count,
+            final=final,
+        )
+        last_progress_time = now
+        last_progress_completed = completed_combos
+        last_progress_was_final = final
+
+    def reset_results():
+        nonlocal best_fallback, best_fallback_worst_gap, best_fallback_extensions, best_fallback_angle
+        nonlocal completed_combos, valid_count, progress_start_time, last_progress_time
+        nonlocal last_progress_completed, last_progress_was_final
+        all_valid_results.clear()
+        best_fallback = None
+        best_fallback_worst_gap = -float("inf")
+        best_fallback_extensions = tuple(0 for _ in pairs)
+        best_fallback_angle = 0.0
+        completed_combos = 0
+        valid_count = 0
+        progress_start_time = time.perf_counter()
+        last_progress_time = 0.0
+        last_progress_completed = -1
+        last_progress_was_final = False
+
+    def consume_chunk(chunk_result):
+        nonlocal best_fallback, best_fallback_worst_gap, best_fallback_extensions, best_fallback_angle
+        nonlocal completed_combos, valid_count
+
+        chunk_fallback = chunk_result.get("best_fallback")
+        chunk_worst_gap = chunk_result.get("best_fallback_worst_gap", -float("inf"))
+        if chunk_fallback is not None and chunk_worst_gap > best_fallback_worst_gap:
+            best_fallback = chunk_fallback
+            best_fallback_worst_gap = chunk_worst_gap
+            best_fallback_extensions = chunk_result.get("best_fallback_extensions", (0,))
+            best_fallback_angle = chunk_result.get("best_fallback_angle", 0.0)
+
+        chunk_valid_results = chunk_result.get("valid_results", [])
+        all_valid_results.extend(chunk_valid_results)
+        valid_count += len(chunk_valid_results)
+        completed_combos += chunk_result.get("chunk_end", 0) - chunk_result.get("chunk_start", 0)
+        report_progress()
+
+    def run_executor(executor_cls):
+        task_iter = iter(iter_chunk_tasks())
+        submit_window = max(worker_count * 2, 1)
+
+        with executor_cls(max_workers=worker_count) as executor:
+            pending = set()
+
+            def submit_next():
+                try:
+                    task = next(task_iter)
+                except StopIteration:
+                    return False
+                pending.add(executor.submit(_evaluate_cpu_combo_chunk, task))
+                return True
+
+            for _ in range(submit_window):
+                if not submit_next():
+                    break
+
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    consume_chunk(future.result())
+                    submit_next()
+
+    run_parallel = worker_count > 1 and total_combos >= 64
+    def iter_chunk_tasks():
+        for chunk_start in range(0, total_combos, chunk_size):
+            yield (
+                strands_list,
+                pair_indices,
+                pair_directions,
+                pair_originals,
+                ext_range_values,
+                chunk_start,
+                min(chunk_start + chunk_size, total_combos),
+                angle_step_degrees,
+                max_extension,
+                strand_width,
+                custom_angle_min,
+                custom_angle_max,
+                angle_mode,
+            )
+
+    if run_parallel:
+        print(
+            f"  CPU parallel search: {worker_count} workers, chunk_size={chunk_size}, "
+            f"{total_combos} combos"
+        )
+        report_progress(force=True)
+        try:
+            run_executor(ProcessPoolExecutor)
+        except Exception as parallel_error:
+            if show_progress and completed_combos:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            print(f"  CPU process search failed ({parallel_error}); retrying with threads.")
+            reset_results()
+            report_progress(force=True)
+            try:
+                run_executor(ThreadPoolExecutor)
+            except Exception as thread_error:
+                if show_progress and completed_combos:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                print(f"  CPU threaded search failed ({thread_error}); retrying serially.")
+                reset_results()
+                run_parallel = False
+
+    if not run_parallel:
+        report_progress(force=True)
+        for task in iter_chunk_tasks():
+            consume_chunk(_evaluate_cpu_combo_chunk(task))
+
+    report_progress(force=True, final=show_progress)
+    all_valid_results.sort(key=lambda result: result.get("combo_index", -1))
+
+    if on_config_callback:
+        for result in all_valid_results:
+            on_config_callback(
+                result["angle_degrees"],
+                result["pair_extensions"],
+                result,
+                direction_type,
+            )
+
+    return (
+        all_valid_results,
+        best_fallback,
+        best_fallback_worst_gap,
+        best_fallback_extensions,
+        best_fallback_angle,
+        total_combos,
+    )
+
+
 def align_horizontal_strands_parallel(all_strands, n,
                                        angle_step_degrees=0.5,
                                        max_extension=100.0, strand_width=46,
@@ -2600,7 +3112,6 @@ def align_horizontal_strands_parallel(all_strands, n,
         }
 
     # Build outside-in pairs: (1st, last), (2nd, one-before-last), etc.
-    import itertools
     pairs = [(horizontal_strands[i], horizontal_strands[num_strands - 1 - i])
              for i in range(num_strands // 2)]
     # If odd number of strands, middle strand gets a solo pair entry
@@ -2693,15 +3204,29 @@ def align_horizontal_strands_parallel(all_strands, n,
     best_fallback_extensions = tuple(0 for _ in pairs)
     best_fallback_angle = 0
 
-    ext_range = range(0, max_pair_extension + pair_extension_step, pair_extension_step)
-    ext_range_values = list(ext_range)
+    ext_range_values = list(range(0, max_pair_extension + pair_extension_step, pair_extension_step))
     num_pairs = len(pairs)
     total_combos = len(ext_range_values) ** num_pairs
-    combo_count = 0
-    found_valid = False
+    combo_count = total_combos
+    can_use_gpu = use_gpu and _check_cupy_available()
+    combo_guard = get_alignment_combo_guard(
+        total_combos,
+        num_pairs,
+        max_pair_extension,
+        pair_extension_step,
+        use_gpu=can_use_gpu,
+    )
+
+    if combo_guard:
+        print(f"\n=== Search Skipped ===")
+        print(combo_guard["message"])
+        return {
+            "success": False,
+            "message": combo_guard["message"],
+        }
 
     # === GPU or CPU combo search ===
-    if use_gpu and _check_cupy_available():
+    if can_use_gpu:
         print(f"\n--- GPU search: {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) ---")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             horizontal_strands, pairs, pair_directions, pair_originals,
@@ -2713,6 +3238,7 @@ def align_horizontal_strands_parallel(all_strands, n,
             on_config_callback=on_config_callback,
             chunk_size=2048,
             direction_type="horizontal",
+            allow_inner_extensions=False,
         )
         if gpu_fallback:
             best_fallback = gpu_fallback
@@ -2723,88 +3249,28 @@ def align_horizontal_strands_parallel(all_strands, n,
         if use_gpu:
             print("WARNING: GPU requested but CuPy not available. Falling back to NumPy.")
         print(f"\n--- Searching {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) [numpy-accelerated] ---")
-
-        for combo in itertools.product(ext_range, repeat=num_pairs):
-            combo_count += 1
-
-            # Apply each pair's extension to both strands in the pair
-            for pair_idx, (left_strand_p, right_strand_p) in enumerate(pairs):
-                ext = combo[pair_idx]
-                l_nx, l_ny, r_nx, r_ny = pair_directions[pair_idx]
-                l_orig, r_orig = pair_originals[pair_idx]
-
-                left_strand_p["original_start"]["x"] = l_orig["x"] + ext * l_nx
-                left_strand_p["original_start"]["y"] = l_orig["y"] + ext * l_ny
-
-                if right_strand_p is not None and r_orig is not None:
-                    right_strand_p["original_start"]["x"] = r_orig["x"] + ext * r_nx
-                    right_strand_p["original_start"]["y"] = r_orig["y"] + ext * r_ny
-
-            # Recalculate angle range after extension (for auto mode)
-            first_dx_ext = first_strand["target_position"]["x"] - first_strand["original_start"]["x"]
-            first_dy_ext = first_strand["target_position"]["y"] - first_strand["original_start"]["y"]
-            first_angle_ext = math.degrees(math.atan2(first_dy_ext, first_dx_ext))
-
-            # Use custom angles directly, or recalculate based on extension + angle_mode
-            if use_custom_h:
-                angle_min_deg = base_angle_min
-                angle_max_deg = base_angle_max
-            else:
-                _adapted_ext = [{"strand": h["strand_4_5"], "start": h["original_start"], "target": h["target_position"]}
-                                for h in horizontal_strands]
-                _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(_adapted_ext, angle_mode)
-
-            if combo_count % 100 == 1:  # Log periodically
-                print(f"\n--- Combo {combo_count}/{total_combos}: extensions={combo} ---")
-                print(f"    First strand angle (extended): {first_angle_ext:.2f}°")
-                print(f"    Angle range: {angle_min_deg:.2f}° to {angle_max_deg:.2f}°")
-
-            # Build angle array and use numpy batch search
-            step = max(1, int(angle_step_degrees * 100))
-            angle_start = int(angle_min_deg * 100)
-            angle_end = int(angle_max_deg * 100)
-            angles_deg_list = [h / 100.0 for h in range(angle_start, angle_end + 1, step)]
-
-            np_result = _numpy_try_all_angles(
-                horizontal_strands, angles_deg_list, max_extension, strand_width
-            )
-
-            # Also run callback for the best result if callback is set
-            if np_result and on_config_callback:
-                on_config_callback(np_result["angle_degrees"], combo, np_result, "horizontal")
-
-            if np_result and np_result.get("valid"):
-                np_result["pair_extensions"] = combo
-                all_valid_results.append(np_result)
-                found_valid = True
-                if combo_count % 100 == 1:
-                    print(f"\n  >>> VALID combo {combo}, angle {np_result['angle_degrees']:.2f}°")
-                    print(f"      Gap variance: {np_result['gap_variance']:.4f}, Avg gap: {np_result['average_gap']:.2f}px, First-last dist: {np_result.get('first_last_distance', 'N/A')}")
-            else:
-                # Track fallback from non-numpy path for this combo
-                fallback_result = try_angle_configuration_first_last(
-                    horizontal_strands,
-                    math.radians(angles_deg_list[len(angles_deg_list) // 2]) if angles_deg_list else 0,
-                    max_extension, strand_width, verbose=False
-                )
-                fallback = fallback_result.get("fallback")
-                if fallback and fallback_result.get("directions_valid", False):
-                    worst_gap = fallback.get("worst_gap", 0)
-                    if worst_gap > best_fallback_worst_gap:
-                        best_fallback_worst_gap = worst_gap
-                        best_fallback = fallback
-                        best_fallback_extensions = combo
-                        best_fallback_angle = fallback_result.get("angle_degrees",
-                            angles_deg_list[len(angles_deg_list) // 2] if angles_deg_list else 0)
-
-        # Restore all original positions
-        for pair_idx, (left_strand_p, right_strand_p) in enumerate(pairs):
-            l_orig, r_orig = pair_originals[pair_idx]
-            left_strand_p["original_start"]["x"] = l_orig["x"]
-            left_strand_p["original_start"]["y"] = l_orig["y"]
-            if right_strand_p is not None and r_orig is not None:
-                right_strand_p["original_start"]["x"] = r_orig["x"]
-                right_strand_p["original_start"]["y"] = r_orig["y"]
+        (
+            all_valid_results,
+            best_fallback,
+            best_fallback_worst_gap,
+            best_fallback_extensions,
+            best_fallback_angle,
+            combo_count,
+        ) = _search_combo_space_cpu(
+            horizontal_strands,
+            pairs,
+            pair_directions,
+            pair_originals,
+            ext_range_values,
+            angle_step_degrees,
+            max_extension,
+            strand_width,
+            custom_angle_min if use_custom_h else None,
+            custom_angle_max if use_custom_h else None,
+            angle_mode,
+            on_config_callback=on_config_callback,
+            direction_type="horizontal",
+        )
 
     best_result = _select_best_result(all_valid_results)
     if best_result:
@@ -2998,7 +3464,6 @@ def align_vertical_strands_parallel(all_strands, n, m,
         }
 
     # Build outside-in pairs: (1st, last), (2nd, one-before-last), etc.
-    import itertools
     pairs = [(vertical_strands[i], vertical_strands[num_strands - 1 - i])
              for i in range(num_strands // 2)]
     # If odd number of strands, middle strand gets a solo pair entry
@@ -3090,15 +3555,29 @@ def align_vertical_strands_parallel(all_strands, n, m,
     best_fallback_extensions = tuple(0 for _ in pairs)
     best_fallback_angle = 0
 
-    ext_range = range(0, max_pair_extension + pair_extension_step, pair_extension_step)
-    ext_range_values = list(ext_range)
+    ext_range_values = list(range(0, max_pair_extension + pair_extension_step, pair_extension_step))
     num_pairs = len(pairs)
     total_combos = len(ext_range_values) ** num_pairs
-    combo_count = 0
-    found_valid = False
+    combo_count = total_combos
+    can_use_gpu = use_gpu and _check_cupy_available()
+    combo_guard = get_alignment_combo_guard(
+        total_combos,
+        num_pairs,
+        max_pair_extension,
+        pair_extension_step,
+        use_gpu=can_use_gpu,
+    )
+
+    if combo_guard:
+        print(f"\n=== Search Skipped ===")
+        print(combo_guard["message"])
+        return {
+            "success": False,
+            "message": combo_guard["message"],
+        }
 
     # === GPU or CPU combo search ===
-    if use_gpu and _check_cupy_available():
+    if can_use_gpu:
         print(f"\n--- GPU search (vertical): {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) ---")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             vertical_strands, pairs, pair_directions, pair_originals,
@@ -3110,6 +3589,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
             on_config_callback=on_config_callback,
             chunk_size=2048,
             direction_type="vertical",
+            allow_inner_extensions=False,
         )
         if gpu_fallback:
             best_fallback = gpu_fallback
@@ -3120,88 +3600,28 @@ def align_vertical_strands_parallel(all_strands, n, m,
         if use_gpu:
             print("WARNING: GPU requested but CuPy not available. Falling back to NumPy.")
         print(f"\n--- Searching {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) [numpy-accelerated] ---")
-
-        for combo in itertools.product(ext_range, repeat=num_pairs):
-            combo_count += 1
-
-            # Apply each pair's extension to both strands in the pair
-            for pair_idx, (left_strand_p, right_strand_p) in enumerate(pairs):
-                ext = combo[pair_idx]
-                l_nx, l_ny, r_nx, r_ny = pair_directions[pair_idx]
-                l_orig, r_orig = pair_originals[pair_idx]
-
-                left_strand_p["original_start"]["x"] = l_orig["x"] + ext * l_nx
-                left_strand_p["original_start"]["y"] = l_orig["y"] + ext * l_ny
-
-                if right_strand_p is not None and r_orig is not None:
-                    right_strand_p["original_start"]["x"] = r_orig["x"] + ext * r_nx
-                    right_strand_p["original_start"]["y"] = r_orig["y"] + ext * r_ny
-
-            # Recalculate angle range after extension (for auto mode)
-            first_dx_ext = first_strand["target_position"]["x"] - first_strand["original_start"]["x"]
-            first_dy_ext = first_strand["target_position"]["y"] - first_strand["original_start"]["y"]
-            first_angle_ext = math.degrees(math.atan2(first_dy_ext, first_dx_ext))
-
-            # Use custom angles directly, or recalculate based on extension + angle_mode
-            if use_custom_v:
-                angle_min_deg = base_angle_min
-                angle_max_deg = base_angle_max
-            else:
-                _adapted_ext = [{"strand": v["strand_4_5"], "start": v["original_start"], "target": v["target_position"]}
-                                for v in vertical_strands]
-                _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(_adapted_ext, angle_mode)
-
-            if combo_count % 100 == 1:  # Log periodically
-                print(f"\n--- Combo {combo_count}/{total_combos}: extensions={combo} ---")
-                print(f"    First strand angle (extended): {first_angle_ext:.2f}°")
-                print(f"    Angle range: {angle_min_deg:.2f}° to {angle_max_deg:.2f}°")
-
-            # Build angle array and use numpy batch search
-            step = max(1, int(angle_step_degrees * 100))
-            angle_start = int(angle_min_deg * 100)
-            angle_end = int(angle_max_deg * 100)
-            angles_deg_list = [h / 100.0 for h in range(angle_start, angle_end + 1, step)]
-
-            np_result = _numpy_try_all_angles(
-                vertical_strands, angles_deg_list, max_extension, strand_width
-            )
-
-            # Also run callback for the best result if callback is set
-            if np_result and on_config_callback:
-                on_config_callback(np_result["angle_degrees"], combo, np_result, "vertical")
-
-            if np_result and np_result.get("valid"):
-                np_result["pair_extensions"] = combo
-                all_valid_results.append(np_result)
-                found_valid = True
-                if combo_count % 100 == 1:
-                    print(f"\n  >>> VALID combo {combo}, angle {np_result['angle_degrees']:.2f}°")
-                    print(f"      Gap variance: {np_result['gap_variance']:.4f}, Avg gap: {np_result['average_gap']:.2f}px, First-last dist: {np_result.get('first_last_distance', 'N/A')}")
-            else:
-                # Track fallback from non-numpy path for this combo
-                fallback_result = try_angle_configuration_first_last(
-                    vertical_strands,
-                    math.radians(angles_deg_list[len(angles_deg_list) // 2]) if angles_deg_list else 0,
-                    max_extension, strand_width, verbose=False
-                )
-                fallback = fallback_result.get("fallback")
-                if fallback and fallback_result.get("directions_valid", False):
-                    worst_gap = fallback.get("worst_gap", 0)
-                    if worst_gap > best_fallback_worst_gap:
-                        best_fallback_worst_gap = worst_gap
-                        best_fallback = fallback
-                        best_fallback_extensions = combo
-                        best_fallback_angle = fallback_result.get("angle_degrees",
-                            angles_deg_list[len(angles_deg_list) // 2] if angles_deg_list else 0)
-
-        # Restore all original positions
-        for pair_idx, (left_strand_p, right_strand_p) in enumerate(pairs):
-            l_orig, r_orig = pair_originals[pair_idx]
-            left_strand_p["original_start"]["x"] = l_orig["x"]
-            left_strand_p["original_start"]["y"] = l_orig["y"]
-            if right_strand_p is not None and r_orig is not None:
-                right_strand_p["original_start"]["x"] = r_orig["x"]
-                right_strand_p["original_start"]["y"] = r_orig["y"]
+        (
+            all_valid_results,
+            best_fallback,
+            best_fallback_worst_gap,
+            best_fallback_extensions,
+            best_fallback_angle,
+            combo_count,
+        ) = _search_combo_space_cpu(
+            vertical_strands,
+            pairs,
+            pair_directions,
+            pair_originals,
+            ext_range_values,
+            angle_step_degrees,
+            max_extension,
+            strand_width,
+            custom_angle_min if use_custom_v else None,
+            custom_angle_max if use_custom_v else None,
+            angle_mode,
+            on_config_callback=on_config_callback,
+            direction_type="vertical",
+        )
 
     best_result = _select_best_result(all_valid_results)
     if best_result:
@@ -3261,7 +3681,14 @@ def align_vertical_strands_parallel(all_strands, n, m,
         }
 
 
-def try_angle_configuration_first_last(strands_list, angle_rad, max_extension, strand_width, verbose=False):
+def try_angle_configuration_first_last(
+    strands_list,
+    angle_rad,
+    max_extension,
+    strand_width,
+    verbose=False,
+    allow_inner_extensions=True,
+):
     """
     Try a specific angle using the FIRST-LAST pair approach.
 
@@ -3338,6 +3765,12 @@ def try_angle_configuration_first_last(strands_list, angle_rad, max_extension, s
             "goes_positive": goes_positive,
         }
 
+    extension_values = (
+        range(0, int(max_extension) + 1, 5)
+        if allow_inner_extensions
+        else (0,)
+    )
+
     # Special case: exactly 2 strands - search for extension combo with valid gap
     if len(strands_list) == 2:
         first_strand = strands_list[0]
@@ -3348,7 +3781,7 @@ def try_angle_configuration_first_last(strands_list, angle_rad, max_extension, s
         ideal_gap = (min_gap + max_gap) / 2  # 57.5 px
 
         # Search extension combinations
-        for ext1 in range(0, int(max_extension) + 1, 5):
+        for ext1 in extension_values:
             config1 = compute_strand_config(first_strand, ext1)
             if not config1:
                 continue
@@ -3356,7 +3789,7 @@ def try_angle_configuration_first_last(strands_list, angle_rad, max_extension, s
             # Precompute line params for config1 (reused for all ext2 iterations)
             line_params1 = precompute_line_params(config1["extended_start"], config1["end"])
 
-            for ext2 in range(0, int(max_extension) + 1, 5):
+            for ext2 in extension_values:
                 config2 = compute_strand_config(last_strand, ext2)
                 if not config2:
                     continue
@@ -3420,7 +3853,7 @@ def try_angle_configuration_first_last(strands_list, angle_rad, max_extension, s
     for idx, h_strand in enumerate(strands_list):
         best_config = None
 
-        for extension in range(0, int(max_extension) + 1, 5):
+        for extension in extension_values:
             config = compute_strand_config(h_strand, extension)
             if config:
                 best_config = config
