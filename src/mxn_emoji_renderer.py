@@ -60,14 +60,16 @@ class EmojiRenderer:
             "emoji_assets"
         )
         self.AVAILABLE_EMOJI_SETS = {
-            "default": None,  # Use system font rendering (no local PNG assets)
+            "default": "default_system",  # Pre-rendered system emoji PNGs (512x512)
             "twemoji": "twemoji_512",
             "openmoji": "openmoji_72",
             "fluent": "fluent_emoji",
             "joypixels": "joypixels_72",
         }
         self._current_emoji_set = "default"
-        self._emoji_assets_dir = None
+        self._emoji_assets_dir = os.path.join(
+            self._emoji_sets_base, "default_system"
+        )
         # Cache of per-glyph diagnostics used for console debugging of halo/stroke artifacts.
         self._emoji_glyph_diagnostics = {}
         # Incremented per draw pass to make terminal logs easier to correlate.
