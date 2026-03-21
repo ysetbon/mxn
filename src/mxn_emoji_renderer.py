@@ -982,8 +982,10 @@ class EmojiRenderer:
             - Position is offset outward from the strand endpoint
             - Offset distance accounts for strand width and font size
         """
-        # Check if emojis should be shown
-        if not settings.get("show", True):
+        show_emojis = settings.get("show", True)
+        show_strand_names = settings.get("show_strand_names", False)
+
+        if not show_emojis and not show_strand_names:
             return
 
         padding = self.BOUNDS_PADDING
@@ -1288,9 +1290,6 @@ class EmojiRenderer:
                 "ep_type": ep_type,
             })
 
-        # Check if strand names should be shown
-        show_strand_names = settings.get("show_strand_names", False)
-
         # Draw each emoji label
         painter.save()
         self._emoji_debug_draw_pass += 1
@@ -1353,16 +1352,17 @@ class EmojiRenderer:
             painter.setBrush(Qt.NoBrush)
             painter.setPen(Qt.NoPen)
             # Render at the exact 50x50 logical size matching the source PNG assets.
-            glyph_img = self._get_emoji_glyph_image(txt, font, w, h, ss=3)
-            if glyph_img is not None:
-                painter.drawImage(rect, glyph_img)
-                glyph_key = ("emoji_asset_glyph", txt, int(w), int(h), 3)
-                diag = self._emoji_glyph_diagnostics.get(glyph_key) or self._analyze_glyph_halo(glyph_img)
-                self._emoji_glyph_diagnostics[glyph_key] = diag
-            else:
-                # Fallback: direct text draw (should rarely happen)
-                painter.setPen(QColor(0, 0, 0, 255))
-                painter.drawText(rect, Qt.AlignCenter, txt)
+            if show_emojis:
+                glyph_img = self._get_emoji_glyph_image(txt, font, w, h, ss=3)
+                if glyph_img is not None:
+                    painter.drawImage(rect, glyph_img)
+                    glyph_key = ("emoji_asset_glyph", txt, int(w), int(h), 3)
+                    diag = self._emoji_glyph_diagnostics.get(glyph_key) or self._analyze_glyph_halo(glyph_img)
+                    self._emoji_glyph_diagnostics[glyph_key] = diag
+                else:
+                    # Fallback: direct text draw (should rarely happen)
+                    painter.setPen(QColor(0, 0, 0, 255))
+                    painter.drawText(rect, Qt.AlignCenter, txt)
 
             # Draw strand name if enabled (only for END points of _2/_3 strands)
             if show_strand_names and strand_name:
@@ -1432,8 +1432,7 @@ class EmojiRenderer:
         """
         import math
 
-        # Only show indicator if emojis are enabled
-        if not settings.get("show", True):
+        if not settings.get("show_rotation_indicator", settings.get("show", True)):
             return
 
         k = int(settings.get("k", 0))

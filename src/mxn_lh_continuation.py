@@ -3831,11 +3831,10 @@ def apply_parallel_alignment(all_strands, alignment_result):
     Returns:
         List of modified strands
     """
-    if not alignment_result["success"]:
-        print("Cannot apply alignment: no valid configuration found")
+    configurations = alignment_result.get("configurations") or []
+    if not configurations:
+        print("Cannot apply alignment: no configurations available")
         return all_strands
-
-    configurations = alignment_result["configurations"]
 
     # Build lookup for quick access
     strand_lookup = {s["layer_name"]: s for s in all_strands}
