@@ -347,7 +347,22 @@ def generate_json(m, n, k=0, direction="cw"):
         color = strand["color"]
 
         if layer_name.endswith("_2"):
-            # _4 attaches to _2's end and goes to the paired position
+            # Retract _2's end by 52px toward _2's start (default extension)
+            dx = strand["end"]["x"] - strand["start"]["x"]
+            dy = strand["end"]["y"] - strand["start"]["y"]
+            length = math.sqrt(dx * dx + dy * dy)
+            if length > 0.001:
+                nx = dx / length
+                ny = dy / length
+                strand["end"]["x"] -= nx * 52
+                strand["end"]["y"] -= ny * 52
+            # Update control_points and control_point_center to match new end
+            if strand.get("control_points") and strand["control_points"][1] is not None:
+                strand["control_points"][1]["x"] = strand["end"]["x"]
+                strand["control_points"][1]["y"] = strand["end"]["y"]
+            strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+            strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+            # _4 attaches to _2's new end and goes to the paired position
             start_x = strand["end"]["x"]
             start_y = strand["end"]["y"]
 
@@ -380,7 +395,22 @@ def generate_json(m, n, k=0, direction="cw"):
             print(f"  Created {set_num}_4 (from _2): start=({start_x}, {start_y}), end=({end_x:.1f}, {end_y:.1f})")
 
         elif layer_name.endswith("_3"):
-            # _5 attaches to _3's end and goes to the paired position
+            # Retract _3's end by 52px toward _3's start (default extension)
+            dx = strand["end"]["x"] - strand["start"]["x"]
+            dy = strand["end"]["y"] - strand["start"]["y"]
+            length = math.sqrt(dx * dx + dy * dy)
+            if length > 0.001:
+                nx = dx / length
+                ny = dy / length
+                strand["end"]["x"] -= nx * 52
+                strand["end"]["y"] -= ny * 52
+            # Update control_points and control_point_center to match new end
+            if strand.get("control_points") and strand["control_points"][1] is not None:
+                strand["control_points"][1]["x"] = strand["end"]["x"]
+                strand["control_points"][1]["y"] = strand["end"]["y"]
+            strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+            strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+            # _5 attaches to _3's new end and goes to the paired position
             start_x = strand["end"]["x"]
             start_y = strand["end"]["y"]
 
