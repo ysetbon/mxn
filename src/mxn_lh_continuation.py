@@ -3021,6 +3021,20 @@ def align_horizontal_strands_parallel(all_strands, n,
         dict with success, angle, configurations, gaps, etc.
     """
 
+    # k=0 special case: continuation IS the alignment, no calculation needed
+    if k == 0:
+        return {
+            "success": True,
+            "angle": 0,
+            "angle_degrees": 0,
+            "configurations": [],
+            "average_gap": 0,
+            "gap_variance": 0,
+            "min_gap": strand_width,
+            "max_gap": strand_width * 1.5,
+            "message": "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
+        }
+
     # Build k-based horizontal strand set
     if k != 0 and m is not None:
         h_names_set, h_order_list, _, _ = _build_k_based_strand_sets(m, n, k, direction)
@@ -3371,6 +3385,20 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "message": str
         }
     """
+
+    # k=0 special case: continuation IS the alignment, no calculation needed
+    if k == 0:
+        return {
+            "success": True,
+            "angle": 0,
+            "angle_degrees": 0,
+            "configurations": [],
+            "average_gap": 0,
+            "gap_variance": 0,
+            "min_gap": strand_width,
+            "max_gap": strand_width * 1.5,
+            "message": "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
+        }
 
     # Build k-based vertical strand set
     if k != 0:
