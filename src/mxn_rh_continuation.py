@@ -67,11 +67,18 @@ def _run_with_rh_ordering(func, *args, **kwargs):
     # Step 1: Save the original LH ordering functions so we can restore them later
     original_h = _lh_alignment.get_horizontal_order_k
     original_v = _lh_alignment.get_vertical_order_k
+    had_special_direction_helper = hasattr(_lh_alignment, "_get_effective_direction_for_max_k_special")
+    original_special_direction_helper = getattr(
+        _lh_alignment,
+        "_get_effective_direction_for_max_k_special",
+        None,
+    )
     try:
         # Step 2: Replace LH ordering functions with RH versions (monkey-patch)
         # Now when LH code calls get_horizontal_order_k(), it gets RH's version
         _lh_alignment.get_horizontal_order_k = get_horizontal_order_k
         _lh_alignment.get_vertical_order_k = get_vertical_order_k
+        _lh_alignment._get_effective_direction_for_max_k_special = _get_effective_direction_for_max_k_special
 
         # Step 3: Run the LH function — it uses RH ordering because we swapped above
         # All kwargs (like use_gpu=True) pass through unchanged
@@ -81,6 +88,45 @@ def _run_with_rh_ordering(func, *args, **kwargs):
         # This prevents RH ordering from "leaking" into future LH calls
         _lh_alignment.get_horizontal_order_k = original_h
         _lh_alignment.get_vertical_order_k = original_v
+        if had_special_direction_helper:
+            _lh_alignment._get_effective_direction_for_max_k_special = original_special_direction_helper
+        else:
+            delattr(_lh_alignment, "_get_effective_direction_for_max_k_special")
+
+
+def _get_effective_direction_for_max_k_special(m, n, k, direction):
+    """
+    RH canonicalizes the unequal max-k case to the CW calculation path so CW
+    and CCW share the same continuation/alignment ordering.
+    """
+    if (k == m + n) and (m != n):
+        return "cw"
+    return direction
+
+
+def _build_k_based_strand_sets(m, n, k, direction):
+    """
+    RH version of the k-based H/V _4/_5 set builder used by alignment preview/UI.
+
+    Returns:
+        (h_names_set, h_order_list, v_names_set, v_order_list)
+    """
+    effective_direction = _get_effective_direction_for_max_k_special(m, n, k, direction)
+    h_order_23 = get_horizontal_order_k(m, n, k, effective_direction)
+    v_order_23 = get_vertical_order_k(m, n, k, effective_direction)
+
+    def convert_23_to_45(order_list):
+        result = []
+        for label in order_list:
+            parts = label.split("_")
+            new_suffix = "4" if parts[1] == "2" else "5"
+            result.append(f"{parts[0]}_{new_suffix}")
+        return result
+
+    h_order = convert_23_to_45(h_order_23)
+    v_order = convert_23_to_45(v_order_23)
+
+    return set(h_order), h_order, set(v_order), v_order
 
 
 def get_parallel_alignment_preview(all_strands, n, m, k=0, direction="cw", angle_mode="first_strand"):

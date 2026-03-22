@@ -3821,8 +3821,8 @@ class MxNGeneratorDialog(QDialog):
             print(f"Output dir: {output_subdir}")
 
             # Create filename with pattern details
-            h_status = f"h{h_angle:.1f}" if h_success and h_angle else "h_fail"
-            v_status = f"v{v_angle:.1f}" if v_success and v_angle else "v_fail"
+            h_status = f"h{h_angle:.1f}" if h_success and h_angle is not None else "h_fail"
+            v_status = f"v{v_angle:.1f}" if v_success and v_angle is not None else "v_fail"
             filename_base = f"mxn_{pattern_type}_{m}x{n}_k{k}_{direction}_{h_status}_{v_status}"
 
             # Save image

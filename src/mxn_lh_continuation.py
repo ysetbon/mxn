@@ -310,7 +310,13 @@ def generate_json(m, n, k=0, direction="cw"):
     # STEP 3: Compute emoji pairings based on k and direction
     # =========================================================================
 
-    pairings = compute_emoji_pairings(base_strands, m, n, k, direction)
+    # =========================================================================
+    # Special LH rule:
+    # For k == m+n with unequal set counts, use the CCW ordering/pairing path
+    # for BOTH ccw and cw so the max-k special layout is identical.
+    # =========================================================================
+    effective_direction = _get_effective_direction_for_max_k_special(m, n, k, direction)
+    pairings = compute_emoji_pairings(base_strands, m, n, k, effective_direction)
 
     # =========================================================================
     # STEP 4: Generate continuation strands (_4, _5)
@@ -341,7 +347,130 @@ def generate_json(m, n, k=0, direction="cw"):
 
     print(f"\n=== STEP 4: Generating _4 and _5 strands ===")
     print(f"Using emoji pairings to determine end positions (k={k}, {direction})")
+    if effective_direction != direction:
+        print(f"Using CCW-equivalent ordering for LH max-k special case (effective_direction={effective_direction})")
     print(f"Pairings: {pairings}")
+
+    is_max_k_special = (k == m + n) and (m != n)
+
+    def convert_23_to_45(order_list):
+        result = []
+        for layer in order_list:
+            parts = layer.split("_")
+            new_suffix = "4" if parts[1] == "2" else "5"
+            result.append(f"{parts[0]}_{new_suffix}")
+        return result
+
+    vertical_order_k = get_vertical_order_k(m, n, k, effective_direction)
+    horizontal_order_k = get_horizontal_order_k(m, n, k, effective_direction)
+    vertical_continuation_order = convert_23_to_45(vertical_order_k)
+    horizontal_continuation_order = convert_23_to_45(horizontal_order_k)
+
+    special_layouts = {}
+    if is_max_k_special and n > m:
+        gap_abs = abs(gap)
+        attached_lookup = {
+            s["layer_name"]: s
+            for s in base_strands
+            if s["type"] == "AttachedStrand"
+        }
+
+        def continuation_to_base_layer(layer_name):
+            if layer_name.endswith("_4"):
+                return f"{layer_name[:-1]}2"
+            return f"{layer_name[:-1]}3"
+
+        def layer_start_y(layer_name):
+            base_layer = continuation_to_base_layer(layer_name)
+            return attached_lookup[base_layer]["end"]["y"]
+
+        horizontal_base_2 = [
+            s for s in base_strands
+            if s["type"] == "AttachedStrand" and s["set_number"] <= n and s["layer_name"].endswith("_2")
+        ]
+        horizontal_base_3 = [
+            s for s in base_strands
+            if s["type"] == "AttachedStrand" and s["set_number"] <= n and s["layer_name"].endswith("_3")
+        ]
+
+        top_inner_y = min(s["end"]["y"] for s in horizontal_base_2)
+        bottom_inner_y = max(s["end"]["y"] for s in horizontal_base_3)
+        top_outer_y = top_inner_y - tail_offset
+        bottom_outer_y = bottom_inner_y + tail_offset
+
+        straight_horizontal_layers = [
+            layer_name
+            for layer_name in vertical_continuation_order
+            if int(layer_name.split("_")[0]) <= n
+        ]
+        side_horizontal_layers = [
+            layer_name
+            for layer_name in horizontal_continuation_order
+            if int(layer_name.split("_")[0]) <= n
+        ]
+
+        straight_4_layers = [ln for ln in straight_horizontal_layers if ln.endswith("_4")]
+        straight_5_layers = [ln for ln in straight_horizontal_layers if ln.endswith("_5")]
+        side_4_layers = [ln for ln in side_horizontal_layers if ln.endswith("_4")]
+        side_5_layers = [ln for ln in side_horizontal_layers if ln.endswith("_5")]
+
+        side_4_multipliers = [2 * m + 1 + 2 * idx for idx in range(len(side_4_layers))]
+        side_5_multipliers = list(reversed([2 * m + 1 + 2 * idx for idx in range(len(side_5_layers))]))
+        side_4_x_positions = [center_x - mult * gap_abs for mult in side_4_multipliers]
+        side_5_x_positions = [center_x + mult * gap_abs for mult in side_5_multipliers]
+
+        if side_4_layers:
+            straight_4_min_y = min(layer_start_y(ln) for ln in straight_4_layers)
+            single_center_pair = len(straight_4_layers) == 1
+            for layer_name, x in zip(side_4_layers, side_4_x_positions):
+                y = layer_start_y(layer_name)
+                if y < straight_4_min_y:
+                    target_y = bottom_outer_y if single_center_pair else bottom_inner_y
+                else:
+                    target_y = top_outer_y
+                special_layouts[layer_name] = {
+                    "start": {"x": x, "y": y},
+                    "end": {"x": x, "y": target_y},
+                }
+
+        if side_5_layers:
+            straight_5_min_y = min(layer_start_y(ln) for ln in straight_5_layers)
+            single_center_pair = len(straight_5_layers) == 1
+            for layer_name, x in zip(side_5_layers, side_5_x_positions):
+                y = layer_start_y(layer_name)
+                if y < straight_5_min_y:
+                    target_y = bottom_outer_y
+                else:
+                    target_y = top_outer_y if single_center_pair else top_inner_y
+                special_layouts[layer_name] = {
+                    "start": {"x": x, "y": y},
+                    "end": {"x": x, "y": target_y},
+                }
+
+        if side_4_x_positions:
+            left_straight_x = min(side_4_x_positions) - gap_abs
+        else:
+            left_straight_x = center_x - (2 * m + 2) * gap_abs
+
+        if side_5_x_positions:
+            right_straight_x = max(side_5_x_positions) + gap_abs
+        else:
+            right_straight_x = center_x + (2 * m + 2) * gap_abs
+
+        for layer_name in straight_4_layers:
+            y = layer_start_y(layer_name)
+            special_layouts[layer_name] = {
+                "start": {"x": left_straight_x, "y": y},
+                "end": {"x": right_straight_x + gap_abs, "y": y},
+            }
+        for layer_name in straight_5_layers:
+            y = layer_start_y(layer_name)
+            special_layouts[layer_name] = {
+                "start": {"x": right_straight_x, "y": y},
+                "end": {"x": left_straight_x - gap_abs, "y": y},
+            }
+
+        print(f"  Special LH max-k layout for larger horizontal group: {sorted(special_layouts)}")
 
     for strand in base_strands:
         if strand["type"] != "AttachedStrand":
@@ -352,39 +481,54 @@ def generate_json(m, n, k=0, direction="cw"):
         color = strand["color"]
 
         if layer_name.endswith("_2"):
-            # Retract _2's end by 52px toward _2's start (default extension)
-            dx = strand["end"]["x"] - strand["start"]["x"]
-            dy = strand["end"]["y"] - strand["start"]["y"]
-            length = math.sqrt(dx * dx + dy * dy)
-            if length > 0.001:
-                nx = dx / length
-                ny = dy / length
-                strand["end"]["x"] -= nx * 52
-                strand["end"]["y"] -= ny * 52
-            # Update control_points and control_point_center to match new end
-            if strand.get("control_points") and strand["control_points"][1] is not None:
-                strand["control_points"][1]["x"] = strand["end"]["x"]
-                strand["control_points"][1]["y"] = strand["end"]["y"]
-            strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
-            strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
-            # _4 attaches to _2's new end and goes to the paired position
-            start_x = strand["end"]["x"]
-            start_y = strand["end"]["y"]
-
-            # Get paired position from emoji pairing
-            pairing_key = f"{layer_name}_end"
-            if pairing_key in pairings:
-                paired_pos = pairings[pairing_key]
-                base_end_x = paired_pos["x"]
-                base_end_y = paired_pos["y"]
+            continuation_layer = f"{set_num}_4"
+            special_layout = special_layouts.get(continuation_layer)
+            if special_layout is not None:
+                strand["end"]["x"] = special_layout["start"]["x"]
+                strand["end"]["y"] = special_layout["start"]["y"]
+                if strand.get("control_points") and strand["control_points"][1] is not None:
+                    strand["control_points"][1]["x"] = strand["end"]["x"]
+                    strand["control_points"][1]["y"] = strand["end"]["y"]
+                strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+                strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+                start_x = special_layout["start"]["x"]
+                start_y = special_layout["start"]["y"]
+                end_x = special_layout["end"]["x"]
+                end_y = special_layout["end"]["y"]
             else:
-                # Fallback: shouldn't happen if pairings are computed correctly
-                print(f"  WARNING: No pairing found for {pairing_key}, using start position")
-                base_end_x = start_x
-                base_end_y = start_y
+                # Retract _2's end by 52px toward _2's start (default extension)
+                dx = strand["end"]["x"] - strand["start"]["x"]
+                dy = strand["end"]["y"] - strand["start"]["y"]
+                length = math.sqrt(dx * dx + dy * dy)
+                if length > 0.001:
+                    nx = dx / length
+                    ny = dy / length
+                    strand["end"]["x"] -= nx * 52
+                    strand["end"]["y"] -= ny * 52
+                # Update control_points and control_point_center to match new end
+                if strand.get("control_points") and strand["control_points"][1] is not None:
+                    strand["control_points"][1]["x"] = strand["end"]["x"]
+                    strand["control_points"][1]["y"] = strand["end"]["y"]
+                strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+                strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+                # _4 attaches to _2's new end and goes to the paired position
+                start_x = strand["end"]["x"]
+                start_y = strand["end"]["y"]
 
-            # Extend the end further outward (near emoji position)
-            end_x, end_y = extend_endpoint(start_x, start_y, base_end_x, base_end_y, tail_offset)
+                # Get paired position from emoji pairing
+                pairing_key = f"{layer_name}_end"
+                if pairing_key in pairings:
+                    paired_pos = pairings[pairing_key]
+                    base_end_x = paired_pos["x"]
+                    base_end_y = paired_pos["y"]
+                else:
+                    # Fallback: shouldn't happen if pairings are computed correctly
+                    print(f"  WARNING: No pairing found for {pairing_key}, using start position")
+                    base_end_x = start_x
+                    base_end_y = start_y
+
+                # Extend the end further outward (near emoji position)
+                end_x, end_y = extend_endpoint(start_x, start_y, base_end_x, base_end_y, tail_offset)
 
             strand_4 = create_strand_base(
                 {"x": start_x, "y": start_y},
@@ -400,39 +544,54 @@ def generate_json(m, n, k=0, direction="cw"):
             print(f"  Created {set_num}_4 (from _2): start=({start_x}, {start_y}), end=({end_x:.1f}, {end_y:.1f})")
 
         elif layer_name.endswith("_3"):
-            # Retract _3's end by 52px toward _3's start (default extension)
-            dx = strand["end"]["x"] - strand["start"]["x"]
-            dy = strand["end"]["y"] - strand["start"]["y"]
-            length = math.sqrt(dx * dx + dy * dy)
-            if length > 0.001:
-                nx = dx / length
-                ny = dy / length
-                strand["end"]["x"] -= nx * 52
-                strand["end"]["y"] -= ny * 52
-            # Update control_points and control_point_center to match new end
-            if strand.get("control_points") and strand["control_points"][1] is not None:
-                strand["control_points"][1]["x"] = strand["end"]["x"]
-                strand["control_points"][1]["y"] = strand["end"]["y"]
-            strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
-            strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
-            # _5 attaches to _3's new end and goes to the paired position
-            start_x = strand["end"]["x"]
-            start_y = strand["end"]["y"]
-
-            # Get paired position from emoji pairing
-            pairing_key = f"{layer_name}_end"
-            if pairing_key in pairings:
-                paired_pos = pairings[pairing_key]
-                base_end_x = paired_pos["x"]
-                base_end_y = paired_pos["y"]
+            continuation_layer = f"{set_num}_5"
+            special_layout = special_layouts.get(continuation_layer)
+            if special_layout is not None:
+                strand["end"]["x"] = special_layout["start"]["x"]
+                strand["end"]["y"] = special_layout["start"]["y"]
+                if strand.get("control_points") and strand["control_points"][1] is not None:
+                    strand["control_points"][1]["x"] = strand["end"]["x"]
+                    strand["control_points"][1]["y"] = strand["end"]["y"]
+                strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+                strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+                start_x = special_layout["start"]["x"]
+                start_y = special_layout["start"]["y"]
+                end_x = special_layout["end"]["x"]
+                end_y = special_layout["end"]["y"]
             else:
-                # Fallback: shouldn't happen if pairings are computed correctly
-                print(f"  WARNING: No pairing found for {pairing_key}, using start position")
-                base_end_x = start_x
-                base_end_y = start_y
+                # Retract _3's end by 52px toward _3's start (default extension)
+                dx = strand["end"]["x"] - strand["start"]["x"]
+                dy = strand["end"]["y"] - strand["start"]["y"]
+                length = math.sqrt(dx * dx + dy * dy)
+                if length > 0.001:
+                    nx = dx / length
+                    ny = dy / length
+                    strand["end"]["x"] -= nx * 52
+                    strand["end"]["y"] -= ny * 52
+                # Update control_points and control_point_center to match new end
+                if strand.get("control_points") and strand["control_points"][1] is not None:
+                    strand["control_points"][1]["x"] = strand["end"]["x"]
+                    strand["control_points"][1]["y"] = strand["end"]["y"]
+                strand["control_point_center"]["x"] = (strand["start"]["x"] + strand["end"]["x"]) / 2
+                strand["control_point_center"]["y"] = (strand["start"]["y"] + strand["end"]["y"]) / 2
+                # _5 attaches to _3's new end and goes to the paired position
+                start_x = strand["end"]["x"]
+                start_y = strand["end"]["y"]
 
-            # Extend the end further outward (near emoji position)
-            end_x, end_y = extend_endpoint(start_x, start_y, base_end_x, base_end_y, tail_offset)
+                # Get paired position from emoji pairing
+                pairing_key = f"{layer_name}_end"
+                if pairing_key in pairings:
+                    paired_pos = pairings[pairing_key]
+                    base_end_x = paired_pos["x"]
+                    base_end_y = paired_pos["y"]
+                else:
+                    # Fallback: shouldn't happen if pairings are computed correctly
+                    print(f"  WARNING: No pairing found for {pairing_key}, using start position")
+                    base_end_x = start_x
+                    base_end_y = start_y
+
+                # Extend the end further outward (near emoji position)
+                end_x, end_y = extend_endpoint(start_x, start_y, base_end_x, base_end_y, tail_offset)
 
             strand_5 = create_strand_base(
                 {"x": start_x, "y": start_y},
@@ -449,24 +608,6 @@ def generate_json(m, n, k=0, direction="cw"):
 
     # Order continuation strands based on get_vertical_order_k then get_horizontal_order_k
     # Convert _2 -> _4 and _3 -> _5 for the ordering
-    vertical_order_k = get_vertical_order_k(m, n, k, direction)
-    horizontal_order_k = get_horizontal_order_k(m, n, k, direction)
-
-    # Convert vertical order (_2/_3) to continuation order (_4/_5)
-    vertical_continuation_order = []
-    for layer in vertical_order_k:
-        # e.g., "3_2" -> "3_4", "3_3" -> "3_5"
-        parts = layer.split("_")
-        new_suffix = "4" if parts[1] == "2" else "5"
-        vertical_continuation_order.append(f"{parts[0]}_{new_suffix}")
-
-    # Convert horizontal order (_2/_3) to continuation order (_4/_5)
-    horizontal_continuation_order = []
-    for layer in horizontal_order_k:
-        # e.g., "1_2" -> "1_4", "1_3" -> "1_5"
-        parts = layer.split("_")
-        new_suffix = "4" if parts[1] == "2" else "5"
-        horizontal_continuation_order.append(f"{parts[0]}_{new_suffix}")
 
     # Combined order: vertical first, then horizontal
     continuation_order = vertical_continuation_order + horizontal_continuation_order
@@ -492,7 +633,7 @@ def generate_json(m, n, k=0, direction="cw"):
     # =========================================================================
     print(f"\n=== STEP 5: Generating _4/_5 continuation masks ===")
 
-    masks_info = compute_4_5_masks(base_strands, continuation_strands, m, n, k, direction)
+    masks_info = compute_4_5_masks(base_strands, continuation_strands, m, n, k, effective_direction)
 
     continuation_masked = []
     for mask_info in masks_info:
@@ -552,6 +693,39 @@ def generate_json(m, n, k=0, direction="cw"):
         history["states"].append({"step": step, "data": state_data})
 
     return json.dumps(history, indent=2)
+
+
+def _get_effective_direction_for_max_k_special(m, n, k, direction):
+    """
+    LH canonicalizes the unequal max-k case to the CCW calculation path so CW
+    and CCW generate the same continuation geometry and mask ordering.
+    """
+    if (k == m + n) and (m != n):
+        return "ccw"
+    return direction
+
+
+def _is_max_k_special_case(m, n, k):
+    """Return True when continuation uses the special unequal max-k layout."""
+    return (k == m + n) and (m != n)
+
+
+def _build_preserve_continuation_alignment_result(strand_width, message):
+    """Return a no-op alignment result that preserves the existing continuation."""
+    return {
+        "success": True,
+        "preserve_continuation": True,
+        "angle": 0.0,
+        "angle_degrees": 0.0,
+        "configurations": [],
+        "gaps": [],
+        "signed_gaps": [],
+        "average_gap": 0.0,
+        "gap_variance": 0.0,
+        "min_gap": strand_width,
+        "max_gap": strand_width * 1.5,
+        "message": message,
+    }
 
 
 def get_starting_order(m, n):
@@ -1089,8 +1263,9 @@ def _build_k_based_strand_sets(m, n, k, direction):
     Returns:
         (h_names_set, h_order_list, v_names_set, v_order_list)
     """
-    h_order_23 = get_horizontal_order_k(m, n, k, direction)
-    v_order_23 = get_vertical_order_k(m, n, k, direction)
+    effective_direction = _get_effective_direction_for_max_k_special(m, n, k, direction)
+    h_order_23 = get_horizontal_order_k(m, n, k, effective_direction)
+    v_order_23 = get_vertical_order_k(m, n, k, effective_direction)
 
     def convert_23_to_45(order_list):
         result = []
@@ -3021,19 +3196,17 @@ def align_horizontal_strands_parallel(all_strands, n,
         dict with success, angle, configurations, gaps, etc.
     """
 
-    # k=0 special case: continuation IS the alignment, no calculation needed
+    # Exact-continuation cases: preserve the current _4/_5 geometry as-is.
     if k == 0:
-        return {
-            "success": True,
-            "angle": 0,
-            "angle_degrees": 0,
-            "configurations": [],
-            "average_gap": 0,
-            "gap_variance": 0,
-            "min_gap": strand_width,
-            "max_gap": strand_width * 1.5,
-            "message": "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
-        }
+        return _build_preserve_continuation_alignment_result(
+            strand_width,
+            "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
+        )
+    if m is not None and _is_max_k_special_case(m, n, k):
+        return _build_preserve_continuation_alignment_result(
+            strand_width,
+            "Special max-k case: preserve the exact generated _4/_5 continuation, no alignment needed",
+        )
 
     # Build k-based horizontal strand set
     if k != 0 and m is not None:
@@ -3386,19 +3559,17 @@ def align_vertical_strands_parallel(all_strands, n, m,
         }
     """
 
-    # k=0 special case: continuation IS the alignment, no calculation needed
+    # Exact-continuation cases: preserve the current _4/_5 geometry as-is.
     if k == 0:
-        return {
-            "success": True,
-            "angle": 0,
-            "angle_degrees": 0,
-            "configurations": [],
-            "average_gap": 0,
-            "gap_variance": 0,
-            "min_gap": strand_width,
-            "max_gap": strand_width * 1.5,
-            "message": "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
-        }
+        return _build_preserve_continuation_alignment_result(
+            strand_width,
+            "k=0: _4/_5 alignment matches continuation exactly, no adjustment needed",
+        )
+    if _is_max_k_special_case(m, n, k):
+        return _build_preserve_continuation_alignment_result(
+            strand_width,
+            "Special max-k case: preserve the exact generated _4/_5 continuation, no alignment needed",
+        )
 
     # Build k-based vertical strand set
     if k != 0:
@@ -4292,6 +4463,9 @@ def apply_parallel_alignment(all_strands, alignment_result):
     Returns:
         List of modified strands
     """
+    if alignment_result.get("preserve_continuation"):
+        return all_strands
+
     configurations = alignment_result.get("configurations") or []
     if not configurations:
         print("Cannot apply alignment: no configurations available")
@@ -4343,6 +4517,10 @@ def print_alignment_debug(alignment_result):
     """Print detailed debug information about the alignment result."""
     if not alignment_result["success"]:
         print(f"Alignment failed: {alignment_result['message']}")
+        return
+
+    if alignment_result.get("preserve_continuation"):
+        print(f"Alignment preserved continuation: {alignment_result.get('message', '')}")
         return
 
     print(f"\n{'='*60}")
