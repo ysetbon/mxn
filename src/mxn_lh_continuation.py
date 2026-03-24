@@ -1305,14 +1305,15 @@ def _compute_pair_angle_averages(pair_angles):
     return uniform_avg, gaussian_avg
 
 
-def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand"):
+def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand", num_opposite_pairs=1):
     """
     Compute angle range from a sorted list of strand dicts.
 
     Modes:
         "first_strand"           : first strand angle ±20°
         "avg_gaussian"/"gaussian": use the uniform average and Gaussian average
-                                    as the two bounds of the range
+                                    as the two bounds of the range, with a
+                                    minimum ± padding of atan(1/max(this,opposite))/2
         "uniform"                : legacy behavior, average angle ±20°
 
     Returns (initial_angle, angle_min, angle_max, pair_angles_debug).
@@ -1364,7 +1365,15 @@ def _compute_pair_angle_range(sorted_strands, angle_mode="first_strand"):
     if angle_mode in ("avg_gaussian", "gaussian"):
         angle_min = min(uniform_avg, gaussian_avg)
         angle_max = max(uniform_avg, gaussian_avg)
-        initial_angle = (uniform_avg + gaussian_avg) / 2.0
+        # Ensure minimum range: ±atan(1 / max(this_pairs, opposite_pairs)) / 2
+        num_this_pairs = len(pair_angles)
+        min_half_range = math.degrees(math.atan(1.0 / max(num_this_pairs, num_opposite_pairs))) / 2.0
+        current_half_range = (angle_max - angle_min) / 2.0
+        if current_half_range < min_half_range:
+            center = (angle_min + angle_max) / 2.0
+            angle_min = center - min_half_range
+            angle_max = center + min_half_range
+        initial_angle = (angle_min + angle_max) / 2.0
         return initial_angle, angle_min, angle_max, pair_debug
 
     initial_angle = ref_angle
@@ -1416,30 +1425,6 @@ def get_parallel_alignment_preview(all_strands, n, m, k=0, direction="cw", angle
         h_order_index = {name: i for i, name in enumerate(h_order_list)}
         h_strands.sort(key=lambda h: h_order_index.get(h["strand"]["layer_name"], 999))
 
-        first_h = h_strands[0]
-        last_h = h_strands[-1]
-
-        print(f"\n--- Horizontal angle range (mode: {angle_mode}) ---")
-        initial_angle, angle_min, angle_max, pair_debug = _compute_pair_angle_range(h_strands, angle_mode)
-        for left_name, right_name, pa in pair_debug:
-            print(f"    Pair ({left_name}, {right_name}): {pa:.1f}°")
-
-        # Get full strand order
-        strand_order = [h["strand"]["layer_name"] for h in h_strands]
-
-        result["horizontal"] = {
-            "first_start": first_h["start"],
-            "first_target": first_h["target"],
-            "last_start": last_h["start"],
-            "last_target": last_h["target"],
-            "initial_angle": initial_angle,
-            "angle_min": angle_min,
-            "angle_max": angle_max,
-            "first_name": first_h["strand"]["layer_name"],
-            "last_name": last_h["strand"]["layer_name"],
-            "strand_order": strand_order,
-        }
-
     # Collect vertical _4/_5 strands (k-based grouping)
     v_strands = []
     for strand in all_strands:
@@ -1467,11 +1452,43 @@ def get_parallel_alignment_preview(all_strands, n, m, k=0, direction="cw", angle
         v_order_index = {name: i for i, name in enumerate(v_order_list)}
         v_strands.sort(key=lambda v: v_order_index.get(v["strand"]["layer_name"], 999))
 
+    # Compute pair counts for opposite-set padding
+    h_num_pairs = (len(h_strands) + 1) // 2 if len(h_strands) >= 2 else 1
+    v_num_pairs = (len(v_strands) + 1) // 2 if len(v_strands) >= 2 else 1
+
+    if len(h_strands) >= 2:
+        first_h = h_strands[0]
+        last_h = h_strands[-1]
+
+        print(f"\n--- Horizontal angle range (mode: {angle_mode}) ---")
+        initial_angle, angle_min, angle_max, pair_debug = _compute_pair_angle_range(
+            h_strands, angle_mode, num_opposite_pairs=v_num_pairs)
+        for left_name, right_name, pa in pair_debug:
+            print(f"    Pair ({left_name}, {right_name}): {pa:.1f}°")
+
+        # Get full strand order
+        strand_order = [h["strand"]["layer_name"] for h in h_strands]
+
+        result["horizontal"] = {
+            "first_start": first_h["start"],
+            "first_target": first_h["target"],
+            "last_start": last_h["start"],
+            "last_target": last_h["target"],
+            "initial_angle": initial_angle,
+            "angle_min": angle_min,
+            "angle_max": angle_max,
+            "first_name": first_h["strand"]["layer_name"],
+            "last_name": last_h["strand"]["layer_name"],
+            "strand_order": strand_order,
+        }
+
+    if len(v_strands) >= 2:
         first_v = v_strands[0]
         last_v = v_strands[-1]
 
         print(f"\n--- Vertical angle range (mode: {angle_mode}) ---")
-        initial_angle, angle_min, angle_max, pair_debug = _compute_pair_angle_range(v_strands, angle_mode)
+        initial_angle, angle_min, angle_max, pair_debug = _compute_pair_angle_range(
+            v_strands, angle_mode, num_opposite_pairs=h_num_pairs)
         for left_name, right_name, pa in pair_debug:
             print(f"    Pair ({left_name}, {right_name}): {pa:.1f}°")
 
@@ -1516,7 +1533,8 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
                                on_config_callback=None,
                                chunk_size=2048,
                                direction_type="horizontal",
-                               allow_inner_extensions=True):
+                               allow_inner_extensions=True,
+                               num_opposite_pairs=1):
     """
     GPU-accelerated combo search using CuPy.  Replaces the itertools.product
     loop, processing *chunk_size* extension combos at a time on the GPU.
@@ -1731,6 +1749,15 @@ def _cupy_search_combo_chunks(strands_list, pairs, pair_directions, pair_origina
                         gaussian_avg = cp.sum(pair_angles_deg * gaussian_weights_gpu[None, :], axis=1)
                     angle_min_deg = cp.minimum(uniform_avg, gaussian_avg)
                     angle_max_deg = cp.maximum(uniform_avg, gaussian_avg)
+                    # Ensure minimum range: ±atan(1 / max(this_pairs, opposite_pairs)) / 2
+                    min_half_range = np.float32(
+                        math.degrees(math.atan(1.0 / max(P, num_opposite_pairs))) / 2.0
+                    )
+                    center_deg = (angle_min_deg + angle_max_deg) * np.float32(0.5)
+                    current_half = (angle_max_deg - angle_min_deg) * np.float32(0.5)
+                    need_pad = current_half < min_half_range
+                    angle_min_deg = cp.where(need_pad, center_deg - min_half_range, angle_min_deg)
+                    angle_max_deg = cp.where(need_pad, center_deg + min_half_range, angle_max_deg)
 
             chunk_angle_min = float(cp.min(angle_min_deg).get())
             chunk_angle_max = float(cp.max(angle_max_deg).get())
@@ -2774,6 +2801,7 @@ def _evaluate_cpu_combo_chunk(task):
         custom_angle_min,
         custom_angle_max,
         angle_mode,
+        num_opposite_pairs,
     ) = task
 
     working_strands = _clone_alignment_strands(strands_list)
@@ -2814,7 +2842,7 @@ def _evaluate_cpu_combo_chunk(task):
                 }
                 for strand in working_strands
             ]
-            _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(adapted, angle_mode)
+            _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(adapted, angle_mode, num_opposite_pairs=num_opposite_pairs)
 
         angles_deg_list = _build_angle_values(angle_min_deg, angle_max_deg, angle_step_degrees)
         np_result = _numpy_try_all_angles(
@@ -2984,6 +3012,7 @@ def _search_combo_space_cpu(
     angle_mode,
     on_config_callback=None,
     direction_type="horizontal",
+    num_opposite_pairs=1,
 ):
     """
     Search the CPU combo space while preserving the existing validity rules and
@@ -3108,6 +3137,7 @@ def _search_combo_space_cpu(
                 custom_angle_min,
                 custom_angle_max,
                 angle_mode,
+                num_opposite_pairs,
             )
 
     if run_parallel:
@@ -3210,10 +3240,13 @@ def align_horizontal_strands_parallel(all_strands, n,
 
     # Build k-based horizontal strand set
     if k != 0 and m is not None:
-        h_names_set, h_order_list, _, _ = _build_k_based_strand_sets(m, n, k, direction)
+        h_names_set, h_order_list, _, v_order_list = _build_k_based_strand_sets(m, n, k, direction)
+        # Opposite (vertical) pair count for gaussian range padding
+        v_num_opposite_pairs = max((len(v_order_list) + 1) // 2, 1)
     else:
         h_names_set = None
         h_order_list = None
+        v_num_opposite_pairs = 1
 
     # Collect ALL _2/_3 strands (needed for structural pairing regardless of group)
     strands_2 = []
@@ -3375,7 +3408,8 @@ def align_horizontal_strands_parallel(all_strands, n,
         # Build adapter list for _compute_pair_angle_range
         _adapted = [{"strand": h["strand_4_5"], "start": h["original_start"], "target": h["target_position"]}
                      for h in horizontal_strands]
-        _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(_adapted, angle_mode)
+        _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(
+            _adapted, angle_mode, num_opposite_pairs=v_num_opposite_pairs)
         print(f"\n--- Angle Range (mode={angle_mode}) ---")
         print(f"    First strand initial angle: {first_initial_angle:.2f}°")
         print(f"    Computed range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
@@ -3426,6 +3460,7 @@ def align_horizontal_strands_parallel(all_strands, n,
             chunk_size=2048,
             direction_type="horizontal",
             allow_inner_extensions=False,
+            num_opposite_pairs=v_num_opposite_pairs,
         )
         if gpu_fallback:
             best_fallback = gpu_fallback
@@ -3457,6 +3492,7 @@ def align_horizontal_strands_parallel(all_strands, n,
             angle_mode,
             on_config_callback=on_config_callback,
             direction_type="horizontal",
+            num_opposite_pairs=v_num_opposite_pairs,
         )
 
     best_result = _select_best_result(all_valid_results)
@@ -3573,10 +3609,13 @@ def align_vertical_strands_parallel(all_strands, n, m,
 
     # Build k-based vertical strand set
     if k != 0:
-        _, _, v_names_set, v_order_list = _build_k_based_strand_sets(m, n, k, direction)
+        _, h_order_list_opp, v_names_set, v_order_list = _build_k_based_strand_sets(m, n, k, direction)
+        # Opposite (horizontal) pair count for gaussian range padding
+        h_num_opposite_pairs = max((len(h_order_list_opp) + 1) // 2, 1)
     else:
         v_names_set = None
         v_order_list = None
+        h_num_opposite_pairs = 1
 
     # Collect ALL _2/_3 strands (needed for structural pairing regardless of group)
     strands_2 = []
@@ -3738,7 +3777,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
     else:
         _adapted = [{"strand": v["strand_4_5"], "start": v["original_start"], "target": v["target_position"]}
                      for v in vertical_strands]
-        _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(_adapted, angle_mode)
+        _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(
+            _adapted, angle_mode, num_opposite_pairs=h_num_opposite_pairs)
         print(f"\n--- Angle Range (mode={angle_mode}) ---")
         print(f"    First strand initial angle: {first_initial_angle:.2f}°")
         print(f"    Computed range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
@@ -3789,6 +3829,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
             chunk_size=2048,
             direction_type="vertical",
             allow_inner_extensions=False,
+            num_opposite_pairs=h_num_opposite_pairs,
         )
         if gpu_fallback:
             best_fallback = gpu_fallback
@@ -3820,6 +3861,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
             angle_mode,
             on_config_callback=on_config_callback,
             direction_type="vertical",
+            num_opposite_pairs=h_num_opposite_pairs,
         )
 
     best_result = _select_best_result(all_valid_results)
