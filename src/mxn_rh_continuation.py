@@ -1111,8 +1111,6 @@ def get_horizontal_order_k(m, n, k, direction):
                     pointer_k[i] = full_order_oposite_orientation[(shift_position + shift_steps) % total_len]
                     break
 
-    for i in range(len(pointer_k)):
-        print(f"horizontal_order_k[{i}]: {pointer_k[i]}")
     return pointer_k
 
 
@@ -1202,8 +1200,6 @@ def get_vertical_order_k(m, n, k, direction):
                     # shift to the right by ((k-1)/2) positions
                     out[i] = full_order_oposite_orientation[(shift_position + shift_steps) % total_len]
                     break
-    for i in range(len(out)):
-        print(f"vertical_order_k[{i}]: {out[i]}")
     return out
 
 def get_mask_order_k(m, n, k, direction):

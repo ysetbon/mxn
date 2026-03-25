@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QCheckBox, QColorDialog, QMessageBox, QTextEdit, QProgressBar,
     QApplication, QSizePolicy, QFileDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QSize, QRectF, QPointF
+from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QSize, QRectF, QPointF, QThread
 from PyQt5.QtGui import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush, QPainterPath
 
 # Add local and sibling repo paths for imports.
@@ -220,6 +220,401 @@ class ImagePreviewWidget(QLabel):
             self.setPixmap(scaled)
 
 
+class BatchWorker(QThread):
+    """Runs the batch pipeline loop off the UI thread."""
+    progress = pyqtSignal(int, int, str)       # (current_idx, total, status_text)
+    log_message = pyqtSignal(str)              # log line
+    finished_batch = pyqtSignal(int, int, int, int)  # (saved, skipped, errors, total)
+
+    def __init__(self, combinations, params, parent=None):
+        super().__init__(parent)
+        self.combinations = combinations
+        self.params = params
+        self._stop_requested = False
+        self._main_window = None
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def _log(self, msg):
+        self.log_message.emit(msg)
+
+    def _get_main_window(self):
+        if self._main_window is None:
+            app = QApplication.instance()
+            original_stylesheet = app.styleSheet() if app else ""
+            try:
+                from openstrandstudio.src.main_window import MainWindow
+                self._main_window = MainWindow()
+                self._main_window.hide()
+                self._main_window.canvas.hide()
+                # Suppress UI side effects for batch mode
+                self._main_window.canvas._suppress_layer_panel_refresh = True
+                self._main_window.canvas._suppress_repaint = True
+            except Exception as e:
+                self._log(f"ERROR: Failed to create MainWindow: {e}")
+                return None
+            finally:
+                if app is not None:
+                    app.setStyleSheet(original_stylesheet)
+        return self._main_window
+
+    def _load_json_to_canvas(self, json_content):
+        from openstrandstudio.src.save_load_manager import load_strands_from_data, apply_loaded_strands
+
+        main_window = self._get_main_window()
+        if not main_window:
+            return None
+        canvas = main_window.canvas
+
+        canvas.strands = []
+        canvas.strand_colors = {}
+        canvas.selected_strand = None
+        canvas.current_strand = None
+
+        data = json.loads(json_content)
+        current_state = _get_active_history_state(data)
+        current_data = current_state.get("data") if current_state is not None else data
+        if not current_data:
+            return None
+
+        strands, groups, _, _, _, _, _, shadow_overrides = load_strands_from_data(current_data, canvas)
+
+        apply_loaded_strands(canvas, strands, groups, shadow_overrides)
+
+        canvas.show_grid = False
+        canvas.show_control_points = False
+        canvas.shadow_enabled = False
+        canvas.should_draw_names = False
+        for strand in canvas.strands:
+            strand.should_draw_shadow = False
+
+        return self._calculate_bounds(canvas)
+
+    def _calculate_bounds(self, canvas):
+        if not canvas.strands:
+            return QRectF(0, 0, 1200, 900)
+
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
+        padding = 100
+
+        for strand in canvas.strands:
+            points = [strand.start, strand.end]
+            if hasattr(strand, 'control_point1') and strand.control_point1:
+                points.append(strand.control_point1)
+            if hasattr(strand, 'control_point2') and strand.control_point2:
+                points.append(strand.control_point2)
+            for pt in points:
+                min_x = min(min_x, pt.x())
+                max_x = max(max_x, pt.x())
+                min_y = min(min_y, pt.y())
+                max_y = max(max_y, pt.y())
+
+        if min_x == float('inf'):
+            return QRectF(0, 0, 1200, 900)
+
+        return QRectF(min_x - padding, min_y - padding,
+                      max_x - min_x + 2 * padding, max_y - min_y + 2 * padding)
+
+    def _render_image(self, bounds, scale_factor):
+        from openstrandstudio.src.render_utils import RenderUtils
+
+        main_window = self._get_main_window()
+        if not main_window:
+            return None
+        canvas = main_window.canvas
+
+        w = int(bounds.width() * scale_factor)
+        h = int(bounds.height() * scale_factor)
+        image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.white)
+
+        painter = QPainter(image)
+        RenderUtils.setup_painter(painter, enable_high_quality=True)
+        painter.scale(scale_factor, scale_factor)
+        painter.translate(-bounds.x(), -bounds.y())
+
+        for strand in canvas.strands:
+            strand.draw(painter, skip_painter_setup=True)
+        if canvas.current_strand:
+            canvas.current_strand.draw(painter, skip_painter_setup=True)
+
+        painter.end()
+        return image
+
+    def _render_batch_overlays(self, canvas, bounds, base_image, scale_factor,
+                               m, n, k, direction,
+                               draw_emojis, draw_strand_names, draw_arrows):
+        from openstrandstudio.src.render_utils import RenderUtils
+
+        w = base_image.width()
+        h = base_image.height()
+
+        emoji_settings = {
+            "show": draw_emojis,
+            "show_strand_names": draw_strand_names,
+            "show_rotation_indicator": draw_arrows,
+            "k": k,
+            "direction": direction,
+            "transparent": True,
+        }
+
+        overlay = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        overlay.fill(Qt.transparent)
+
+        ep = QPainter(overlay)
+        RenderUtils.setup_painter(ep, enable_high_quality=True)
+        ep.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        ep.scale(scale_factor, scale_factor)
+        ep.translate(-bounds.x(), -bounds.y())
+
+        if draw_emojis or draw_strand_names:
+            self._emoji_renderer.draw_endpoint_emojis(
+                ep, canvas, bounds, m, n, emoji_settings
+            )
+        if draw_arrows:
+            self._emoji_renderer.draw_rotation_indicator(ep, bounds, emoji_settings, scale_factor)
+
+        ep.end()
+
+        painter = QPainter(base_image)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.drawImage(0, 0, overlay)
+        painter.end()
+
+        return base_image
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        p = self.params
+        combinations = self.combinations
+        total = len(combinations)
+
+        angle_mode = p['angle_mode']
+        pair_ext_max = p['pair_ext_max']
+        pair_ext_step = p['pair_ext_step']
+        use_gpu = p['use_gpu']
+        scale_factor = p['scale_factor']
+        custom_colors = p['custom_colors']
+        save_extra_outputs = p['save_extra_outputs']
+        save_pre_align = p['save_pre_align']
+        draw_emojis = p['draw_emojis']
+        draw_strand_names = p['draw_strand_names']
+        draw_arrows = p['draw_arrows']
+        base_dir = p['base_dir']
+
+        self._emoji_renderer = p['emoji_renderer']
+
+        saved = 0
+        skipped = 0
+        errors = 0
+
+        io_pool = ThreadPoolExecutor(max_workers=2)
+        pending_futures = []
+
+        for idx, (m, n, k, direction, hand) in enumerate(combinations):
+            if self._stop_requested:
+                self._log(f"\nStopped by user after {idx}/{total}.")
+                break
+
+            status_text = (
+                f"Processing {idx + 1}/{total}: {hand.upper()} {m}x{n} k={k} {direction.upper()} | "
+                f"Saved: {saved}, Skipped: {skipped}, Errors: {errors}"
+            )
+            self.progress.emit(idx, total, status_text)
+
+            try:
+                self._log(f"[{idx + 1}/{total}] {hand.upper()} {m}x{n} k={k} {direction.upper()}")
+
+                # --- Step 1: Generate continuation JSON ---
+                if hand == "lh":
+                    cont_json = generate_lh_continuation_json(m, n, k, direction)
+                else:
+                    cont_json = generate_rh_continuation_json(m, n, k, direction)
+
+                cont_json = self._apply_colors_to_json(cont_json, custom_colors)
+
+                # Save pre-alignment continuation (optional)
+                if save_pre_align:
+                    cont_dir = os.path.join(base_dir, "mxn", "mxn_continueing", f"mxn_{hand}_continuation")
+                    os.makedirs(cont_dir, exist_ok=True)
+                    cont_filename = f"mxn_{hand}_strech_{m}x{n}_continue_k{k}_{direction}.json"
+                    with open(os.path.join(cont_dir, cont_filename), 'w') as f:
+                        f.write(cont_json)
+
+                # --- Step 2: Parse strands ---
+                data = json.loads(cont_json)
+                strands = _get_active_strands(data)
+
+                # --- Step 3: Select alignment functions ---
+                if hand == "lh":
+                    align_h_fn = align_horizontal_strands_parallel_lh
+                    align_v_fn = align_vertical_strands_parallel_lh
+                    apply_fn = apply_parallel_alignment_lh
+                else:
+                    align_h_fn = align_horizontal_strands_parallel_rh
+                    align_v_fn = align_vertical_strands_parallel_rh
+                    apply_fn = apply_parallel_alignment_rh
+
+                # --- Step 4: Horizontal alignment ---
+                h_result = align_h_fn(
+                    strands, n,
+                    angle_step_degrees=0.5,
+                    max_extension=100.0,
+                    max_pair_extension=pair_ext_max,
+                    pair_extension_step=pair_ext_step,
+                    m=m, k=k, direction=direction,
+                    use_gpu=use_gpu,
+                    angle_mode=angle_mode,
+                )
+
+                h_success = h_result.get("success", False)
+                if h_result["success"] or h_result.get("is_fallback"):
+                    strands = apply_fn(strands, h_result)
+                    h_angle = h_result.get("angle_degrees", 0)
+                    h_gap = h_result.get("average_gap", 0)
+                    self._log(f"  H: {'OK' if h_success else 'fallback'} angle={h_angle:.1f} gap={h_gap:.1f}px")
+                else:
+                    self._log(f"  H: FAILED - {h_result.get('message', '')}")
+
+                # --- Step 5: Vertical alignment ---
+                v_result = align_v_fn(
+                    strands, n, m,
+                    angle_step_degrees=0.5,
+                    max_extension=100.0,
+                    max_pair_extension=pair_ext_max,
+                    pair_extension_step=pair_ext_step,
+                    k=k, direction=direction,
+                    use_gpu=use_gpu,
+                    angle_mode=angle_mode,
+                )
+
+                v_success = v_result.get("success", False)
+                if v_result["success"] or v_result.get("is_fallback"):
+                    strands = apply_fn(strands, v_result)
+                    v_angle = v_result.get("angle_degrees", 0)
+                    v_gap = v_result.get("average_gap", 0)
+                    self._log(f"  V: {'OK' if v_success else 'fallback'} angle={v_angle:.1f} gap={v_gap:.1f}px")
+                else:
+                    self._log(f"  V: FAILED - {v_result.get('message', '')}")
+
+                # --- Step 6: Update strands in data ---
+                _set_active_strands(data, strands)
+
+                aligned_json = json.dumps(data, indent=2)
+
+                # --- Step 7: Save outputs ---
+                is_valid = h_success and v_success
+                diagram_name = f"{m}x{n}"
+                base_output_dir = os.path.join(
+                    base_dir, "mxn", "mxn_output", diagram_name,
+                    f"k_{k}_{direction}_{hand}"
+                )
+
+                h_tag = f"h{h_result.get('angle_degrees', 0):.1f}" if h_success else "h_fail"
+                v_tag = f"v{v_result.get('angle_degrees', 0):.1f}" if v_success else "v_fail"
+                fname = f"mxn_{hand}_{m}x{n}_k{k}_{direction}_{h_tag}_{v_tag}"
+
+                # Decide which folders to save into
+                save_dirs = []
+                if is_valid:
+                    save_dirs.append(os.path.join(base_output_dir, "best_solution"))
+                    if save_extra_outputs:
+                        save_dirs.append(os.path.join(base_output_dir, "valid_options"))
+                else:
+                    if save_extra_outputs:
+                        save_dirs.append(os.path.join(base_output_dir, "partial_options"))
+
+                if not save_dirs:
+                    self._log("  -> skipped (partial result, extra output folders disabled)")
+                    skipped += 1
+                    continue
+
+                # Render the image once
+                bounds = self._load_json_to_canvas(aligned_json)
+                image = None
+                if bounds:
+                    image = self._render_image(bounds, scale_factor)
+                    if image and not image.isNull() and (draw_emojis or draw_strand_names or draw_arrows):
+                        main_window = self._get_main_window()
+                        if main_window:
+                            image = self._render_batch_overlays(
+                                main_window.canvas, bounds, image, scale_factor,
+                                m, n, k, direction,
+                                draw_emojis, draw_strand_names, draw_arrows,
+                            )
+
+                # Save to each target folder (async via thread pool)
+                for output_dir in save_dirs:
+                    os.makedirs(output_dir, exist_ok=True)
+                    # Submit JSON write
+                    json_path = os.path.join(output_dir, f"{fname}.json")
+                    json_data = aligned_json
+                    pending_futures.append(
+                        io_pool.submit(self._write_file, json_path, json_data)
+                    )
+                    # Submit PNG save
+                    if image and not image.isNull():
+                        png_path = os.path.join(output_dir, f"{fname}.png")
+                        img_copy = image.copy()
+                        pending_futures.append(
+                            io_pool.submit(img_copy.save, png_path)
+                        )
+
+                # Periodically drain completed futures to catch errors
+                if len(pending_futures) > 20:
+                    done = [f for f in pending_futures if f.done()]
+                    for f in done:
+                        f.result()
+                        pending_futures.remove(f)
+
+                result_str = "VALID" if is_valid else "partial"
+                folders_str = " + ".join(os.path.basename(d) for d in save_dirs)
+                self._log(f"  -> {result_str} | saved to .../{diagram_name}/k_{k}_{direction}_{hand}/ [{folders_str}]")
+                saved += 1
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self._log(f"  ERROR: {e}")
+                errors += 1
+
+        # Drain all remaining futures
+        for f in pending_futures:
+            try:
+                f.result()
+            except Exception as e:
+                self._log(f"  I/O ERROR: {e}")
+        io_pool.shutdown(wait=True)
+
+        self.finished_batch.emit(saved, skipped, errors, total)
+
+    @staticmethod
+    def _write_file(path, content):
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    @staticmethod
+    def _apply_colors_to_json(json_content, custom_colors):
+        if not custom_colors:
+            return json_content
+        data = json.loads(json_content)
+        if data.get('type') == 'OpenStrandStudioHistory':
+            for state in data.get('states', []):
+                for strand in state.get('data', {}).get('strands', []):
+                    sn = strand.get('set_number')
+                    if sn and sn in custom_colors:
+                        strand['color'] = custom_colors[sn]
+        else:
+            for strand in data.get('strands', []):
+                sn = strand.get('set_number')
+                if sn and sn in custom_colors:
+                    strand['color'] = custom_colors[sn]
+        return json.dumps(data, indent=2)
+
+
 class FullAutoDialog(QDialog):
     """Dialog for fully automated batch generation: continuation + parallel alignment."""
 
@@ -230,6 +625,7 @@ class FullAutoDialog(QDialog):
         self._stop_requested = False
         self._running = False
         self._main_window = None
+        self._worker = None
         self._emoji_renderer = EmojiRenderer()
 
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -402,6 +798,14 @@ class FullAutoDialog(QDialog):
             "results save to partial_options. When unchecked, only best_solution is kept."
         )
         align_lay.addWidget(self.save_all_valid_folders_cb, 4, 0, 1, 2)
+
+        self.save_pre_align_cb = QCheckBox("Save pre-alignment JSON")
+        self.save_pre_align_cb.setChecked(False)
+        self.save_pre_align_cb.setToolTip(
+            "Save the raw continuation JSON before alignment.\n"
+            "Disable for faster batch processing."
+        )
+        align_lay.addWidget(self.save_pre_align_cb, 5, 0, 1, 2)
 
         left_layout.addWidget(align_group)
 
@@ -653,6 +1057,8 @@ class FullAutoDialog(QDialog):
 
     def _request_stop(self):
         self._stop_requested = True
+        if self._worker:
+            self._worker.request_stop()
         self._log("Stop requested... finishing current task.")
 
     @staticmethod
@@ -741,8 +1147,7 @@ class FullAutoDialog(QDialog):
         return self._main_window
 
     def _load_json_to_canvas(self, json_content):
-        import tempfile
-        from openstrandstudio.src.save_load_manager import load_strands, apply_loaded_strands
+        from openstrandstudio.src.save_load_manager import load_strands_from_data, apply_loaded_strands
 
         main_window = self._get_main_window()
         if not main_window:
@@ -760,14 +1165,7 @@ class FullAutoDialog(QDialog):
         if not current_data:
             return None
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-            json.dump(current_data, tmp)
-            temp_path = tmp.name
-
-        try:
-            strands, groups, _, _, _, _, _, shadow_overrides = load_strands(temp_path, canvas)
-        finally:
-            os.unlink(temp_path)
+        strands, groups, _, _, _, _, _, shadow_overrides = load_strands_from_data(current_data, canvas)
 
         apply_loaded_strands(canvas, strands, groups, shadow_overrides)
 
@@ -909,6 +1307,7 @@ class FullAutoDialog(QDialog):
         scale_factor = self.scale_combo.currentData()
         custom_colors = self._get_colors_from_parent()
         save_extra_outputs = self.save_all_valid_folders_cb.isChecked()
+        save_pre_align = self.save_pre_align_cb.isChecked()
 
         # Overlay flags
         draw_emojis = self.batch_show_emojis_cb.isChecked()
@@ -940,165 +1339,37 @@ class FullAutoDialog(QDialog):
 
         self.progress_bar.setMaximum(total)
 
-        saved = 0
-        skipped = 0
-        errors = 0
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        params = {
+            'angle_mode': angle_mode,
+            'pair_ext_max': pair_ext_max,
+            'pair_ext_step': pair_ext_step,
+            'use_gpu': use_gpu,
+            'scale_factor': scale_factor,
+            'custom_colors': custom_colors,
+            'save_extra_outputs': save_extra_outputs,
+            'save_pre_align': save_pre_align,
+            'draw_emojis': draw_emojis,
+            'draw_strand_names': draw_strand_names,
+            'draw_arrows': draw_arrows,
+            'base_dir': os.path.dirname(os.path.abspath(__file__)),
+            'emoji_renderer': self._emoji_renderer,
+        }
 
-        for idx, (m, n, k, direction, hand) in enumerate(combinations):
-            if self._stop_requested:
-                self._log(f"\nStopped by user after {idx}/{total}.")
-                break
+        self._worker = BatchWorker(combinations, params, parent=self)
+        self._worker.progress.connect(self._on_worker_progress)
+        self._worker.log_message.connect(self._on_worker_log)
+        self._worker.finished_batch.connect(self._on_worker_finished)
+        self._worker.start()
 
-            self.progress_bar.setValue(idx)
-            self.summary_label.setText(
-                f"Processing {idx + 1}/{total}: {hand.upper()} {m}x{n} k={k} {direction.upper()} | "
-                f"Saved: {saved}, Skipped: {skipped}, Errors: {errors}"
-            )
-            QApplication.processEvents()
+    def _on_worker_progress(self, idx, total, status_text):
+        self.progress_bar.setValue(idx)
+        self.summary_label.setText(status_text)
 
-            try:
-                self._log(f"[{idx + 1}/{total}] {hand.upper()} {m}x{n} k={k} {direction.upper()}")
+    def _on_worker_log(self, msg):
+        self.log_text.append(msg)
 
-                # --- Step 1: Generate continuation JSON ---
-                if hand == "lh":
-                    cont_json = generate_lh_continuation_json(m, n, k, direction)
-                else:
-                    cont_json = generate_rh_continuation_json(m, n, k, direction)
-
-                cont_json = self._apply_colors_to_json(cont_json, custom_colors)
-
-                # Save pre-alignment continuation
-                cont_dir = os.path.join(base_dir, "mxn", "mxn_continueing", f"mxn_{hand}_continuation")
-                os.makedirs(cont_dir, exist_ok=True)
-                cont_filename = f"mxn_{hand}_strech_{m}x{n}_continue_k{k}_{direction}.json"
-                with open(os.path.join(cont_dir, cont_filename), 'w') as f:
-                    f.write(cont_json)
-
-                # --- Step 2: Parse strands ---
-                data = json.loads(cont_json)
-                strands = _get_active_strands(data)
-
-                # --- Step 3: Select alignment functions ---
-                if hand == "lh":
-                    align_h_fn = align_horizontal_strands_parallel_lh
-                    align_v_fn = align_vertical_strands_parallel_lh
-                    apply_fn = apply_parallel_alignment_lh
-                else:
-                    align_h_fn = align_horizontal_strands_parallel_rh
-                    align_v_fn = align_vertical_strands_parallel_rh
-                    apply_fn = apply_parallel_alignment_rh
-
-                # --- Step 4: Horizontal alignment ---
-                h_result = align_h_fn(
-                    strands, n,
-                    angle_step_degrees=0.5,
-                    max_extension=100.0,
-                    max_pair_extension=pair_ext_max,
-                    pair_extension_step=pair_ext_step,
-                    m=m, k=k, direction=direction,
-                    use_gpu=use_gpu,
-                    angle_mode=angle_mode,
-                )
-
-                h_success = h_result.get("success", False)
-                if h_result["success"] or h_result.get("is_fallback"):
-                    strands = apply_fn(strands, h_result)
-                    h_angle = h_result.get("angle_degrees", 0)
-                    h_gap = h_result.get("average_gap", 0)
-                    self._log(f"  H: {'OK' if h_success else 'fallback'} angle={h_angle:.1f} gap={h_gap:.1f}px")
-                else:
-                    self._log(f"  H: FAILED - {h_result.get('message', '')}")
-
-                # --- Step 5: Vertical alignment ---
-                v_result = align_v_fn(
-                    strands, n, m,
-                    angle_step_degrees=0.5,
-                    max_extension=100.0,
-                    max_pair_extension=pair_ext_max,
-                    pair_extension_step=pair_ext_step,
-                    k=k, direction=direction,
-                    use_gpu=use_gpu,
-                    angle_mode=angle_mode,
-                )
-
-                v_success = v_result.get("success", False)
-                if v_result["success"] or v_result.get("is_fallback"):
-                    strands = apply_fn(strands, v_result)
-                    v_angle = v_result.get("angle_degrees", 0)
-                    v_gap = v_result.get("average_gap", 0)
-                    self._log(f"  V: {'OK' if v_success else 'fallback'} angle={v_angle:.1f} gap={v_gap:.1f}px")
-                else:
-                    self._log(f"  V: FAILED - {v_result.get('message', '')}")
-
-                # --- Step 6: Update strands in data ---
-                _set_active_strands(data, strands)
-
-                aligned_json = json.dumps(data, indent=2)
-
-                # --- Step 7: Save outputs ---
-                is_valid = h_success and v_success
-                diagram_name = f"{m}x{n}"
-                base_output_dir = os.path.join(
-                    base_dir, "mxn", "mxn_output", diagram_name,
-                    f"k_{k}_{direction}_{hand}"
-                )
-
-                h_tag = f"h{h_result.get('angle_degrees', 0):.1f}" if h_success else "h_fail"
-                v_tag = f"v{v_result.get('angle_degrees', 0):.1f}" if v_success else "v_fail"
-                fname = f"mxn_{hand}_{m}x{n}_k{k}_{direction}_{h_tag}_{v_tag}"
-
-                # Decide which folders to save into
-                save_dirs = []
-                if is_valid:
-                    save_dirs.append(os.path.join(base_output_dir, "best_solution"))
-                    if save_extra_outputs:
-                        save_dirs.append(os.path.join(base_output_dir, "valid_options"))
-                else:
-                    if save_extra_outputs:
-                        save_dirs.append(os.path.join(base_output_dir, "partial_options"))
-
-                if not save_dirs:
-                    self._log("  -> skipped (partial result, extra output folders disabled)")
-                    skipped += 1
-                    continue
-
-                # Render the image once
-                bounds = self._load_json_to_canvas(aligned_json)
-                image = None
-                if bounds:
-                    image = self._render_image(bounds, scale_factor)
-                    # Render emoji / text overlay if requested
-                    if image and not image.isNull() and (draw_emojis or draw_strand_names or draw_arrows):
-                        main_window = self._get_main_window()
-                        if main_window:
-                            image = self._render_batch_overlays(
-                                main_window.canvas, bounds, image, scale_factor,
-                                m, n, k, direction,
-                                draw_emojis, draw_strand_names, draw_arrows,
-                            )
-
-                # Save to each target folder
-                for output_dir in save_dirs:
-                    os.makedirs(output_dir, exist_ok=True)
-                    with open(os.path.join(output_dir, f"{fname}.json"), 'w', encoding='utf-8') as f:
-                        f.write(aligned_json)
-                    if image and not image.isNull():
-                        image.save(os.path.join(output_dir, f"{fname}.png"))
-
-                result_str = "VALID" if is_valid else "partial"
-                folders_str = " + ".join(os.path.basename(d) for d in save_dirs)
-                self._log(f"  -> {result_str} | saved to .../{diagram_name}/k_{k}_{direction}_{hand}/ [{folders_str}]")
-                saved += 1
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                self._log(f"  ERROR: {e}")
-                errors += 1
-
-        processed = total if not self._stop_requested else (idx + 1 if combinations else 0)
-        self.progress_bar.setValue(processed)
+    def _on_worker_finished(self, saved, skipped, errors, total):
+        self.progress_bar.setValue(total)
         self.summary_label.setText(
             f"Complete: {saved} saved, {skipped} skipped, {errors} errors out of {total} total"
         )
@@ -1159,6 +1430,9 @@ class FullAutoDialog(QDialog):
     def closeEvent(self, event):
         if self._running:
             self._stop_requested = True
+            if self._worker:
+                self._worker.request_stop()
+                self._worker.wait(5000)
         if self._main_window:
             self._main_window.close()
             self._main_window = None
@@ -3109,6 +3383,7 @@ class MxNGeneratorDialog(QDialog):
         v_gap = None
         h_result = {}
         v_result = {}
+        attempt_count = [0]  # Mutable counter for attempt callback
 
         try:
             use_gpu = self.use_gpu_cb.isChecked() if hasattr(self, 'use_gpu_cb') else False
@@ -3139,12 +3414,10 @@ class MxNGeneratorDialog(QDialog):
                 align_horizontal_fn = align_horizontal_strands_parallel_lh
                 align_vertical_fn = align_vertical_strands_parallel_lh
                 apply_alignment_fn = apply_parallel_alignment_lh
-                print_alignment_fn = print_alignment_debug_lh
             else:
                 align_horizontal_fn = align_horizontal_strands_parallel_rh
                 align_vertical_fn = align_vertical_strands_parallel_rh
                 apply_alignment_fn = apply_parallel_alignment_rh
-                print_alignment_fn = print_alignment_debug_rh
 
             # Read pair extension search parameters from UI
             pair_ext_max = self.pair_ext_max_spin.value()
@@ -3159,14 +3432,6 @@ class MxNGeneratorDialog(QDialog):
 
             angle_mode = self.angle_mode_combo.currentData() if hasattr(self, 'angle_mode_combo') else "first_strand"
 
-            if use_custom:
-                print(f"\n*** Using CUSTOM angle ranges (checkbox IS checked) ***")
-                print(f"  Horizontal: {h_custom_min}° to {h_custom_max}°")
-                print(f"  Vertical: {v_custom_min}° to {v_custom_max}°")
-            else:
-                print(f"\n*** Using AUTO angle ranges (checkbox NOT checked, mode={angle_mode}) ***")
-                print(f"  Will use angle mode '{angle_mode}' for range calculation")
-
             # ============================================================
             # SETUP OUTPUT FOLDERS FOR ALL ATTEMPTS
             # ============================================================
@@ -3177,6 +3442,20 @@ class MxNGeneratorDialog(QDialog):
             direction = "cw" if (hasattr(self, 'emoji_cw_radio') and self.emoji_cw_radio.isChecked()) else "ccw"
             diagram_name = f"{m}x{n}"
 
+            print("\n" + "=" * 60)
+            print("  ALIGN PARALLEL — START")
+            print("=" * 60)
+            print(f"  Pattern: {pattern_type.upper()} {m}x{n} | k={k} | dir={direction}")
+            print(f"  Backend: {backend_label}")
+            if use_custom:
+                print(f"  Angle mode: CUSTOM")
+                print(f"    H range: {h_custom_min}° to {h_custom_max}°")
+                print(f"    V range: {v_custom_min}° to {v_custom_max}°")
+            else:
+                print(f"  Angle mode: AUTO ({angle_mode})")
+            print(f"  Pair ext: max={pair_ext_max}px, step={pair_ext_step}px")
+            print("=" * 60, flush=True)
+
             base_output_dir = os.path.join(
                 script_dir,
                 "mxn", "mxn_output", diagram_name, f"k_{k}_{direction}_{pattern_type}"
@@ -3184,8 +3463,9 @@ class MxNGeneratorDialog(QDialog):
             attempt_dir = os.path.join(base_output_dir, "attempt_options")
             os.makedirs(attempt_dir, exist_ok=True)
 
-            attempt_count = [0]  # Use list to allow modification in nested function
             best_h_result_info = [None]  # Mutable container for horizontal result info (set after H phase)
+            h_attempt_count = [0]
+            v_attempt_count = [0]
             attempt_render_contexts = {}
 
             def get_attempt_render_context(direction_type):
@@ -3505,6 +3785,10 @@ class MxNGeneratorDialog(QDialog):
             def save_attempt_callback(angle_deg, extension, result, direction_type):
                 """Save each attempted configuration as an image and analysis text."""
                 attempt_count[0] += 1
+                if direction_type == "horizontal":
+                    h_attempt_count[0] += 1
+                else:
+                    v_attempt_count[0] += 1
 
                 try:
                     # Attempt-level validity is per-direction only; never treat it as
@@ -3607,9 +3891,6 @@ class MxNGeneratorDialog(QDialog):
                                 json.dump(attempt_data, jf, separators=(',', ':'))
                         except Exception as json_err:
                             print(f"  Error saving attempt JSON: {json_err}")
-
-                        if attempt_count[0] % 20 == 0:  # Log every 20th save
-                            print(f"  Saved {attempt_count[0]} images...")
                 except Exception as e:
                     print(f"  Error saving attempt {attempt_count[0]}: {e}")
 
@@ -3618,9 +3899,7 @@ class MxNGeneratorDialog(QDialog):
             # ============================================================
             # Capture current emoji-to-strand mapping so emojis stay with their
             # original strands even after positions change during alignment
-            print("\n" + "="*60)
-            print("FREEZING EMOJI ASSIGNMENTS (pre-alignment)")
-            print("="*60)
+            print("\n  [1/4] Freezing emoji assignments...")
             
             if self._ensure_canvas_prepared(self.current_json_data):
                 main_window = self._get_main_window()
@@ -3637,14 +3916,7 @@ class MxNGeneratorDialog(QDialog):
             # ============================================================
             # HORIZONTAL ALIGNMENT
             # ============================================================
-            print("\n" + "="*60)
-            print("ALIGN HORIZONTAL STRANDS")
-            print("="*60)
-            print(f"  H angle range: {h_custom_min}° to {h_custom_max}°")
-            print(f"  V angle range: {v_custom_min}° to {v_custom_max}°")
-            print(f"  angle_step=0.5°, max_extension=100.0px")
-            print(f"  pair_ext_max={pair_ext_max}px, pair_ext_step={pair_ext_step}px")
-            print(f"  k={k}, direction={direction}, m={m}, n={n}")
+            print(f"\n  [2/4] HORIZONTAL alignment — searching...", flush=True)
 
             h_result = align_horizontal_fn(
                 strands,
@@ -3661,8 +3933,6 @@ class MxNGeneratorDialog(QDialog):
                 angle_mode=angle_mode,
             )
 
-            print_alignment_fn(h_result)
-
             if h_result["success"] or h_result.get("is_fallback"):
                 strands = apply_alignment_fn(strands, h_result)
                 h_success = h_result["success"]  # Only True for real solutions, not fallback
@@ -3670,11 +3940,11 @@ class MxNGeneratorDialog(QDialog):
                 h_gap = h_result.get("average_gap", 0)
                 if h_result.get("is_fallback"):
                     worst_gap = h_result.get("worst_gap", 0)
-                    print(f"Horizontal FALLBACK applied: angle={h_angle:.2f}°, avg_gap={h_gap:.1f}px, worst_gap={worst_gap:.1f}px")
+                    print(f"        H result: FALLBACK  angle={h_angle:.2f}°  avg_gap={h_gap:.1f}px  worst_gap={worst_gap:.1f}px  ({h_attempt_count[0]} attempts saved)")
                 else:
-                    print(f"Horizontal alignment applied: angle={h_angle:.2f}°, gap={h_gap:.1f}px")
+                    print(f"        H result: OK  angle={h_angle:.2f}°  gap={h_gap:.1f}px  ({h_attempt_count[0]} attempts saved)")
             else:
-                print(f"Horizontal alignment failed: {h_result.get('message', 'Unknown')}")
+                print(f"        H result: FAILED  {h_result.get('message', 'Unknown')}  ({h_attempt_count[0]} attempts saved)")
 
             # Build horizontal result info for vertical txt files
             h_info = {
@@ -3696,13 +3966,7 @@ class MxNGeneratorDialog(QDialog):
             # ============================================================
             # VERTICAL ALIGNMENT
             # ============================================================
-            print("\n" + "="*60)
-            print("ALIGN VERTICAL STRANDS")
-            print("="*60)
-            print(f"  V angle range: {v_custom_min}° to {v_custom_max}°")
-            print(f"  angle_step=0.5°, max_extension=100.0px")
-            print(f"  pair_ext_max={pair_ext_max}px, pair_ext_step={pair_ext_step}px")
-            print(f"  k={k}, direction={direction}, m={m}, n={n}")
+            print(f"\n  [3/4] VERTICAL alignment — searching...", flush=True)
 
             v_result = align_vertical_fn(
                 strands,
@@ -3720,8 +3984,6 @@ class MxNGeneratorDialog(QDialog):
                 angle_mode=angle_mode,
             )
 
-            print_alignment_fn(v_result)
-
             if v_result["success"] or v_result.get("is_fallback"):
                 strands = apply_alignment_fn(strands, v_result)
                 v_success = v_result["success"]  # Only True for real solutions, not fallback
@@ -3729,15 +3991,16 @@ class MxNGeneratorDialog(QDialog):
                 v_gap = v_result.get("average_gap", 0)
                 if v_result.get("is_fallback"):
                     worst_gap = v_result.get("worst_gap", 0)
-                    print(f"Vertical FALLBACK applied: angle={v_angle:.2f}°, avg_gap={v_gap:.1f}px, worst_gap={worst_gap:.1f}px")
+                    print(f"        V result: FALLBACK  angle={v_angle:.2f}°  avg_gap={v_gap:.1f}px  worst_gap={worst_gap:.1f}px  ({v_attempt_count[0]} attempts saved)")
                 else:
-                    print(f"Vertical alignment applied: angle={v_angle:.2f}°, gap={v_gap:.1f}px")
+                    print(f"        V result: OK  angle={v_angle:.2f}°  gap={v_gap:.1f}px  ({v_attempt_count[0]} attempts saved)")
             else:
-                print(f"Vertical alignment failed: {v_result.get('message', 'Unknown')}")
+                print(f"        V result: FAILED  {v_result.get('message', 'Unknown')}  ({v_attempt_count[0]} attempts saved)")
 
             # ============================================================
             # UPDATE AND RENDER
             # ============================================================
+            print(f"\n  [4/4] Rendering final image...")
             _set_active_strands(data, strands)
 
             # Update current JSON data
@@ -3788,9 +4051,9 @@ class MxNGeneratorDialog(QDialog):
         # ============================================================
         # SAVE TO PARALLEL OUTPUT FOLDERS (always runs)
         # ============================================================
-        print(f"\n>>> ENTERING SAVE BLOCK <<<")
-        print(f"h_success={h_success}, v_success={v_success}")
-        print(f"h_angle={h_angle}, v_angle={v_angle}")
+        h_str = f"angle={h_angle:.1f}°" if h_angle is not None else "N/A"
+        v_str = f"angle={v_angle:.1f}°" if v_angle is not None else "N/A"
+        print(f"\n  Saving outputs...  H={'OK' if h_success else 'FAIL'}({h_str})  V={'OK' if v_success else 'FAIL'}({v_str})")
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             is_lh = self.lh_radio.isChecked()
@@ -3817,8 +4080,6 @@ class MxNGeneratorDialog(QDialog):
                 output_subdir = os.path.join(base_output_dir, "partial_options")
 
             os.makedirs(output_subdir, exist_ok=True)
-            print(f"\n=== SAVING OUTPUT ===")
-            print(f"Output dir: {output_subdir}")
 
             # Create filename with pattern details
             h_status = f"h{h_angle:.1f}" if h_success and h_angle is not None else "h_fail"
@@ -3829,17 +4090,15 @@ class MxNGeneratorDialog(QDialog):
             if self.current_image and not self.current_image.isNull():
                 img_path = os.path.join(output_subdir, f"{filename_base}.png")
                 save_result = self.current_image.save(img_path)
-                result_type = "SOLUTION" if is_valid_solution else "INVALID"
-                print(f"{result_type} saved: {img_path}")
-                print(f"Save result: {save_result}")
+                result_type = "SOLUTION" if is_valid_solution else "PARTIAL"
+                print(f"  {result_type} image -> {os.path.basename(img_path)}")
             else:
-                print(f"ERROR: No image to save! current_image={self.current_image}")
+                print(f"  ERROR: No image to save!")
 
             # Save aligned JSON next to the image in the same output folder.
             json_path = os.path.join(output_subdir, f"{filename_base}.json")
             with open(json_path, "w", encoding="utf-8") as f:
                 f.write(self.current_json_data)
-            print(f"JSON saved: {json_path}")
 
             # Save TXT with full alignment details (both H and V)
             txt_path = os.path.join(output_subdir, f"{filename_base}.txt")
@@ -3907,7 +4166,22 @@ class MxNGeneratorDialog(QDialog):
                 f.write(f"Angle step: 0.5°\n")
                 f.write(f"Strand width: 46px\n")
 
-            print(f"TXT saved: {txt_path}")
+            print(f"  Output dir: {output_subdir}")
+            print("=" * 60)
+            print("  ALIGN PARALLEL — DONE")
+            result_label = "SOLUTION" if is_valid_solution else "PARTIAL"
+            print(f"  Result: {result_label}")
+            if h_success:
+                print(f"    H: angle={h_angle:.1f}°  gap={h_gap:.1f}px")
+            else:
+                print(f"    H: FAILED")
+            if v_success:
+                print(f"    V: angle={v_angle:.1f}°  gap={v_gap:.1f}px")
+            else:
+                print(f"    V: FAILED")
+            if attempt_count[0] > 0:
+                print(f"  Attempt images saved: {attempt_count[0]}")
+            print("=" * 60 + "\n")
 
             if not (h_success or v_success):
                 self.status_label.setText(
@@ -3975,7 +4249,6 @@ class MxNGeneratorDialog(QDialog):
             preset_path = os.path.join(preset_dir, filename)
             with open(preset_path, "w", encoding="utf-8") as f:
                 json.dump(preset, f, indent=2)
-            print(f"Preset saved: {preset_path}")
 
         except Exception as e:
             print(f"Error saving preset: {e}")
@@ -4302,7 +4575,7 @@ class MxNGeneratorDialog(QDialog):
         """Export JSON to image using MainWindow and canvas (same as export_mxn_images.py)."""
         try:
             from openstrandstudio.src.main_window import MainWindow
-            from openstrandstudio.src.save_load_manager import load_strands, apply_loaded_strands
+            from openstrandstudio.src.save_load_manager import load_strands, load_strands_from_data, apply_loaded_strands
             from openstrandstudio.src.render_utils import RenderUtils
             from PyQt5.QtGui import QPainter
             from PyQt5.QtCore import QPointF
@@ -4333,13 +4606,7 @@ class MxNGeneratorDialog(QDialog):
                         break
 
                 if current_data:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-                        json.dump(current_data, tmp)
-                        temp_path = tmp.name
-
-                    strands, groups, _, _, _, _, _, shadow_overrides = load_strands(temp_path, canvas)
-                    os.unlink(temp_path)
+                    strands, groups, _, _, _, _, _, shadow_overrides = load_strands_from_data(current_data, canvas)
                 else:
                     return False
             else:

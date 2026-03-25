@@ -6,5 +6,8 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/openstrandstudio/src",
         "${workspaceFolder}/src"
-    ]
+    ],
+    "claudeCode.allowDangerouslySkipPermissions": true,
+    "claudeCode.initialPermissionMode": "bypassPermissions",
+    "claudeCode.autosave": true
 }

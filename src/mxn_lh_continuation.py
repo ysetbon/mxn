@@ -851,8 +851,6 @@ def get_horizontal_order_k(m, n, k, direction):
             strand = pointer_k[i]
             shift_position = full_order_oposite_orientation.index(strand)
             pointer_k[i] = full_order_oposite_orientation[(shift_position + shift_steps) % total_len]
-    for i in range(len(pointer_k)):
-        print(f"horizontal_order_k[{i}]: {pointer_k[i]}")
     return pointer_k
 
 def get_vertical_order_k(m, n, k, direction):
@@ -931,9 +929,6 @@ def get_vertical_order_k(m, n, k, direction):
                     shift_position = full_order_oposite_orientation.index(strand)
                     out[i] = full_order_oposite_orientation[(shift_position + shift_steps) % total_len]
                     break
-    for i in range(len(out)):
-        print(f"vertical_order_k[{i}]: {out[i]}")
-
     return out
 
 def get_mask_order_k(m, n, k, direction):
@@ -2754,8 +2749,15 @@ def _format_progress_duration(seconds):
     return f"{minutes:02d}:{secs:02d}"
 
 
+_progress_is_tty = None  # Cached TTY detection
+_progress_last_milestone = -1  # Last printed milestone percentage (non-TTY mode)
+
 def _print_terminal_progress(label, completed, total, start_time, valid_count=0, final=False):
     """Print a single-line terminal progress bar with ETA."""
+    global _progress_is_tty, _progress_last_milestone
+    if _progress_is_tty is None:
+        _progress_is_tty = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+
     safe_total = max(total, 1)
     bounded_completed = max(0, min(completed, safe_total))
     fraction = bounded_completed / safe_total
@@ -2769,15 +2771,36 @@ def _print_terminal_progress(label, completed, total, start_time, valid_count=0,
     filled = min(bar_width, int(bar_width * fraction))
     bar = "#" * filled + "-" * (bar_width - filled)
 
-    line = (
-        f"\r  {label} [{bar}] {bounded_completed:,}/{safe_total:,} "
-        f"({fraction * 100:5.1f}%) | elapsed {_format_progress_duration(elapsed)} "
-        f"| eta {_format_progress_duration(eta_seconds)} | valid {valid_count:,}"
-    )
-    sys.stdout.write(line + " " * 8)
-    if final:
-        sys.stdout.write("\n")
-    sys.stdout.flush()
+    if _progress_is_tty:
+        # Real terminal: use \r to overwrite same line
+        line = (
+            f"\r  {label} [{bar}] {bounded_completed:,}/{safe_total:,} "
+            f"({fraction * 100:5.1f}%) | elapsed {_format_progress_duration(elapsed)} "
+            f"| eta {_format_progress_duration(eta_seconds)} | valid {valid_count:,}"
+        )
+        sys.stdout.write(line + " " * 8)
+        if final:
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+    else:
+        # Not a TTY (redirected/captured): only print at 10% milestones and final
+        milestone = int(fraction * 10)  # 0-10
+        if final:
+            _progress_last_milestone = -1  # Reset for next search phase
+            print(
+                f"  {label} {bounded_completed:,}/{safe_total:,} "
+                f"(100%) | elapsed {_format_progress_duration(elapsed)} "
+                f"| valid {valid_count:,}",
+                flush=True,
+            )
+        elif milestone > _progress_last_milestone:
+            _progress_last_milestone = milestone
+            print(
+                f"  {label} {bounded_completed:,}/{safe_total:,} "
+                f"({fraction * 100:3.0f}%) | elapsed {_format_progress_duration(elapsed)} "
+                f"| eta {_format_progress_duration(eta_seconds)} | valid {valid_count:,}",
+                flush=True,
+            )
 
 
 def _evaluate_cpu_combo_chunk(task):
@@ -3062,9 +3085,11 @@ def _search_combo_space_cpu(
         last_progress_was_final = final
 
     def reset_results():
+        global _progress_last_milestone
         nonlocal best_fallback, best_fallback_worst_gap, best_fallback_extensions, best_fallback_angle
         nonlocal completed_combos, valid_count, progress_start_time, last_progress_time
         nonlocal last_progress_completed, last_progress_was_final
+        _progress_last_milestone = -1
         all_valid_results.clear()
         best_fallback = None
         best_fallback_worst_gap = -float("inf")
@@ -3368,26 +3393,7 @@ def align_horizontal_strands_parallel(all_strands, n,
         right_orig = {"x": right_strand["original_start"]["x"], "y": right_strand["original_start"]["y"]} if right_strand else None
         pair_originals.append((left_orig, right_orig))
 
-    print(f"\n=== Horizontal Parallel Alignment (Per-Pair Independent Extension) ===")
-    print(f"Found {num_strands} horizontal _4/_5 strands, {len(pairs)} pairs")
-    print(f"Max extension: {max_extension}")
-    print(f"Strand width: {strand_width}")
-    print(f"Per-pair extension: 0 to {max_pair_extension} px (step {pair_extension_step})")
-
-    # Debug: Print details of each strand and pair membership
-    print(f"\n--- Strand Details ---")
-    for i, h in enumerate(horizontal_strands):
-        dx = h['target_position']['x'] - h['original_start']['x']
-        dy = h['target_position']['y'] - h['original_start']['y']
-        angle = math.degrees(math.atan2(dy, dx))
-        # Find which pair this strand belongs to
-        pair_label = ""
-        for pi, (left, right) in enumerate(pairs):
-            if h is left:
-                pair_label = f" [Pair {pi+1} LEFT]"
-            elif h is right:
-                pair_label = f" [Pair {pi+1} RIGHT]"
-        print(f"  {i+1}. {h['strand_4_5']['layer_name']}{pair_label} angle={angle:.1f}°")
+    print(f"        {num_strands} H strands, {len(pairs)} pairs | ext 0-{max_pair_extension} (step {pair_extension_step}) | width={strand_width}")
 
     # Use first strand for angle calculation reference
     first_strand = horizontal_strands[0]
@@ -3402,19 +3408,14 @@ def align_horizontal_strands_parallel(all_strands, n,
     if use_custom_h:
         base_angle_min = custom_angle_min
         base_angle_max = custom_angle_max
-        print(f"\n--- Using CUSTOM Horizontal Angle Range ---")
-        print(f"    Custom range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
+        print(f"        H angle range: CUSTOM {base_angle_min:.1f}° to {base_angle_max:.1f}°")
     else:
         # Build adapter list for _compute_pair_angle_range
         _adapted = [{"strand": h["strand_4_5"], "start": h["original_start"], "target": h["target_position"]}
                      for h in horizontal_strands]
         _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(
             _adapted, angle_mode, num_opposite_pairs=v_num_opposite_pairs)
-        print(f"\n--- Angle Range (mode={angle_mode}) ---")
-        print(f"    First strand initial angle: {first_initial_angle:.2f}°")
-        print(f"    Computed range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
-        for ln, rn, pa in _pair_dbg:
-            print(f"      Pair ({ln}, {rn}): {pa:.1f}°")
+        print(f"        H angle range: {base_angle_min:.1f}° to {base_angle_max:.1f}° (mode={angle_mode}, initial={first_initial_angle:.1f}°)")
 
     # Nested loops: one extension range per pair (via itertools.product)
     all_valid_results = []
@@ -3439,8 +3440,7 @@ def align_horizontal_strands_parallel(all_strands, n,
     )
 
     if combo_guard:
-        print(f"\n=== Search Skipped ===")
-        print(combo_guard["message"])
+        print(f"        H SKIPPED: {combo_guard['message']}")
         return {
             "success": False,
             "message": combo_guard["message"],
@@ -3448,7 +3448,7 @@ def align_horizontal_strands_parallel(all_strands, n,
 
     # === GPU or CPU combo search ===
     if can_use_gpu:
-        print(f"\n--- GPU search: {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) ---")
+        print(f"        H search: GPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             horizontal_strands, pairs, pair_directions, pair_originals,
             first_strand, ext_range_values, angle_step_degrees,
@@ -3469,8 +3469,8 @@ def align_horizontal_strands_parallel(all_strands, n,
             best_fallback_angle = gpu_fallback.get("angle_degrees", 0)
     else:
         if use_gpu:
-            print("WARNING: GPU requested but CuPy not available. Falling back to NumPy.")
-        print(f"\n--- Searching {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) [numpy-accelerated] ---")
+            print("        WARNING: GPU requested but CuPy not available, using CPU.")
+        print(f"        H search: CPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         (
             all_valid_results,
             best_fallback,
@@ -3738,26 +3738,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
         right_orig = {"x": right_strand["original_start"]["x"], "y": right_strand["original_start"]["y"]} if right_strand else None
         pair_originals.append((left_orig, right_orig))
 
-    print(f"\n=== Vertical Parallel Alignment (Per-Pair Independent Extension) ===")
-    print(f"Found {num_strands} vertical _4/_5 strands, {len(pairs)} pairs")
-    print(f"Max extension: {max_extension}")
-    print(f"Strand width: {strand_width}")
-    print(f"Per-pair extension: 0 to {max_pair_extension} px (step {pair_extension_step})")
-
-    # Debug: Print details of each strand and pair membership
-    print(f"\n--- Vertical Strand Details ---")
-    for i, v in enumerate(vertical_strands):
-        dx = v['target_position']['x'] - v['original_start']['x']
-        dy = v['target_position']['y'] - v['original_start']['y']
-        angle = math.degrees(math.atan2(dy, dx))
-        # Find which pair this strand belongs to
-        pair_label = ""
-        for pi, (left, right) in enumerate(pairs):
-            if v is left:
-                pair_label = f" [Pair {pi+1} LEFT]"
-            elif v is right:
-                pair_label = f" [Pair {pi+1} RIGHT]"
-        print(f"  {i+1}. {v['strand_4_5']['layer_name']}{pair_label} angle={angle:.1f}°")
+    print(f"        {num_strands} V strands, {len(pairs)} pairs | ext 0-{max_pair_extension} (step {pair_extension_step}) | width={strand_width}")
 
     # Use first strand for angle calculation reference
     first_strand = vertical_strands[0]
@@ -3772,18 +3753,13 @@ def align_vertical_strands_parallel(all_strands, n, m,
     if use_custom_v:
         base_angle_min = custom_angle_min
         base_angle_max = custom_angle_max
-        print(f"\n--- Using CUSTOM Vertical Angle Range ---")
-        print(f"    Custom range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
+        print(f"        V angle range: CUSTOM {base_angle_min:.1f}° to {base_angle_max:.1f}°")
     else:
         _adapted = [{"strand": v["strand_4_5"], "start": v["original_start"], "target": v["target_position"]}
                      for v in vertical_strands]
         _, base_angle_min, base_angle_max, _pair_dbg = _compute_pair_angle_range(
             _adapted, angle_mode, num_opposite_pairs=h_num_opposite_pairs)
-        print(f"\n--- Angle Range (mode={angle_mode}) ---")
-        print(f"    First strand initial angle: {first_initial_angle:.2f}°")
-        print(f"    Computed range: {base_angle_min:.2f}° to {base_angle_max:.2f}°")
-        for ln, rn, pa in _pair_dbg:
-            print(f"      Pair ({ln}, {rn}): {pa:.1f}°")
+        print(f"        V angle range: {base_angle_min:.1f}° to {base_angle_max:.1f}° (mode={angle_mode}, initial={first_initial_angle:.1f}°)")
 
     # Nested loops: one extension range per pair (via itertools.product)
     all_valid_results = []
@@ -3808,8 +3784,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
     )
 
     if combo_guard:
-        print(f"\n=== Search Skipped ===")
-        print(combo_guard["message"])
+        print(f"        V SKIPPED: {combo_guard['message']}")
         return {
             "success": False,
             "message": combo_guard["message"],
@@ -3817,7 +3792,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
 
     # === GPU or CPU combo search ===
     if can_use_gpu:
-        print(f"\n--- GPU search (vertical): {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) ---")
+        print(f"        V search: GPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             vertical_strands, pairs, pair_directions, pair_originals,
             first_strand, ext_range_values, angle_step_degrees,
@@ -3838,8 +3813,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
             best_fallback_angle = gpu_fallback.get("angle_degrees", 0)
     else:
         if use_gpu:
-            print("WARNING: GPU requested but CuPy not available. Falling back to NumPy.")
-        print(f"\n--- Searching {total_combos} extension combinations ({len(ext_range_values)} values x {num_pairs} pairs) [numpy-accelerated] ---")
+            print("        WARNING: GPU requested but CuPy not available, using CPU.")
+        print(f"        V search: CPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         (
             all_valid_results,
             best_fallback,
@@ -4549,8 +4524,6 @@ def apply_parallel_alignment(all_strands, alignment_result):
                 "x": (strand_lookup[layer_name_2_3]["start"]["x"] + config["extended_start"]["x"]) / 2,
                 "y": (strand_lookup[layer_name_2_3]["start"]["y"] + config["extended_start"]["y"]) / 2,
             }
-
-    print(f"\nApplied parallel alignment to {len(configurations)} strands")
 
     return list(strand_lookup.values())
 
