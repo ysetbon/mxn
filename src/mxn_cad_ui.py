@@ -27,9 +27,9 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QSpinBox, QRadioButton,
     QButtonGroup, QScrollArea, QWidget, QGroupBox,
     QComboBox, QCheckBox, QColorDialog, QMessageBox, QTextEdit, QProgressBar,
-    QApplication, QSizePolicy, QFileDialog
+    QApplication, QSizePolicy, QFileDialog, QStyleOptionButton, QProxyStyle, QStyle
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QSize, QRectF, QPointF, QThread
+from PyQt5.QtCore import Qt, pyqtSignal, QStandardPaths, QSize, QRectF, QPointF, QThread, QRect
 from PyQt5.QtGui import QColor, QPixmap, QImage, QFont, QPainter, QPen, QBrush, QPainterPath
 
 # Add local and sibling repo paths for imports.
@@ -114,6 +114,579 @@ def _set_active_strands(data, strands):
         state.setdefault("data", {})["strands"] = strands
     elif isinstance(data, dict):
         data["strands"] = strands
+
+
+class _LargeIndicatorStyle(QProxyStyle):
+    """Proxy style that enforces a specific checkbox indicator size."""
+
+    def __init__(self, base_style, indicator_size=14):
+        super().__init__(base_style)
+        self._indicator_size = indicator_size
+
+    def pixelMetric(self, metric, option=None, widget=None):
+        if metric in (
+            QStyle.PM_IndicatorWidth,
+            QStyle.PM_IndicatorHeight,
+            QStyle.PM_ExclusiveIndicatorWidth,
+            QStyle.PM_ExclusiveIndicatorHeight,
+        ):
+            return self._indicator_size
+        return super().pixelMetric(metric, option, widget)
+
+
+def _apply_large_checkbox_indicator(checkbox, indicator_size=14):
+    """Apply a fixed-size indicator style to a checkbox."""
+    base_style = checkbox.style()
+    if isinstance(base_style, _LargeIndicatorStyle):
+        base_style = base_style.baseStyle()
+    checkbox.setStyle(_LargeIndicatorStyle(base_style, indicator_size))
+    checkbox.setMinimumHeight(max(checkbox.minimumHeight(), indicator_size + 4))
+
+
+def _apply_radio_indicator_size(radio_button, indicator_size=14):
+    """Apply a fixed-size indicator style to a radio button."""
+    base_style = radio_button.style()
+    if isinstance(base_style, _LargeIndicatorStyle):
+        base_style = base_style.baseStyle()
+    radio_button.setStyle(_LargeIndicatorStyle(base_style, indicator_size))
+    radio_button.setMinimumHeight(max(radio_button.minimumHeight(), indicator_size + 4))
+
+
+def _install_custom_checkbox_checkmark(checkbox):
+    """Draw the same crisp white checkmark used in OpenStrandStudio dialogs."""
+    if getattr(checkbox, "_mxn_custom_checkmark_installed", False):
+        return
+
+    original_paint_event = checkbox.paintEvent
+
+    def custom_paint_event(event, _original=original_paint_event, _checkbox=checkbox):
+        _original(event)
+
+        if not _checkbox.isChecked():
+            return
+
+        painter = QPainter(_checkbox)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        style_option = QStyleOptionButton()
+        _checkbox.initStyleOption(style_option)
+        indicator_rect = _checkbox.style().subElementRect(
+            QStyle.SE_CheckBoxIndicator, style_option, _checkbox
+        )
+        indicator_rect = QRect(indicator_rect.x(), indicator_rect.y(), indicator_rect.width(), indicator_rect.height())
+
+        pen_width = max(1.6, indicator_rect.height() * 0.16)
+        painter.setPen(QPen(QColor(255, 255, 255), pen_width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+
+        left = indicator_rect.left()
+        top = indicator_rect.top()
+        width = indicator_rect.width()
+        height = indicator_rect.height()
+
+        check_path = QPainterPath()
+        check_path.moveTo(left + width * 0.25, top + height * 0.55)
+        check_path.lineTo(left + width * 0.42, top + height * 0.72)
+        check_path.lineTo(left + width * 0.78, top + height * 0.28)
+        painter.drawPath(check_path)
+        painter.end()
+
+    checkbox.paintEvent = custom_paint_event
+    checkbox._mxn_custom_checkmark_installed = True
+
+
+def _install_custom_radio_inner_dot(radio_button):
+    """Draw a crisp white inner dot for checked radio buttons."""
+    if getattr(radio_button, "_mxn_custom_radio_dot_installed", False):
+        return
+
+    original_paint_event = radio_button.paintEvent
+
+    def custom_paint_event(event, _original=original_paint_event, _radio=radio_button):
+        _original(event)
+
+        if not _radio.isChecked():
+            return
+
+        painter = QPainter(_radio)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        style_option = QStyleOptionButton()
+        _radio.initStyleOption(style_option)
+        indicator_rect = _radio.style().subElementRect(
+            QStyle.SE_RadioButtonIndicator, style_option, _radio
+        )
+
+        dot_diameter = max(4.0, min(indicator_rect.width(), indicator_rect.height()) * 0.36)
+        center = indicator_rect.center()
+        dot_rect = QRectF(
+            center.x() - dot_diameter / 2.0,
+            center.y() - dot_diameter / 2.0,
+            dot_diameter,
+            dot_diameter,
+        )
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        painter.drawEllipse(dot_rect)
+        painter.end()
+
+    radio_button.paintEvent = custom_paint_event
+    radio_button._mxn_custom_radio_dot_installed = True
+
+
+def _style_toggle_checkbox(checkbox, is_dark_mode, is_enabled=None, spacing=8):
+    """Apply the checkbox styling used by the shadow editor and mask grid dialogs."""
+    if is_enabled is None:
+        is_enabled = checkbox.isEnabled()
+
+    if is_dark_mode:
+        text_color = "#FFFFFF" if is_enabled else "#808080"
+        indicator_border = "#666666"
+        indicator_background = "#2A2A2A"
+        hover_border = "#888888"
+        hover_background = "#454545"
+        checked_background = "#4A6FA5"
+        checked_border = "#6A9FD5"
+        checked_hover_background = "#5A7FB5"
+        checked_hover_border = "#7AAFF5"
+        disabled_indicator = "#1F1F1F"
+        disabled_border = "#444444"
+    else:
+        text_color = "#000000" if is_enabled else "#AAAAAA"
+        indicator_border = "#AAAAAA"
+        indicator_background = "#FFFFFF"
+        hover_border = "#888888"
+        hover_background = "#F8F8F8"
+        checked_background = "#A0C0E0"
+        checked_border = "#7090C0"
+        checked_hover_background = "#B0D0F0"
+        checked_hover_border = "#8AA0D0"
+        disabled_indicator = "#F0F0F0"
+        disabled_border = "#BBBBBB"
+
+    checkbox.setStyleSheet(f"""
+        QCheckBox {{
+            color: {text_color};
+            spacing: {spacing}px;
+            background-color: transparent;
+        }}
+        QCheckBox::indicator {{
+            width: 14px;
+            height: 14px;
+            min-width: 14px;
+            min-height: 14px;
+            border: 2px solid {indicator_border};
+            border-radius: 3px;
+            background-color: {indicator_background};
+        }}
+        QCheckBox::indicator:hover {{
+            border: 2px solid {hover_border};
+            background-color: {hover_background};
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: {checked_background};
+            border: 2px solid {checked_border};
+        }}
+        QCheckBox::indicator:checked:hover {{
+            background-color: {checked_hover_background};
+            border: 2px solid {checked_hover_border};
+        }}
+        QCheckBox::indicator:disabled {{
+            background-color: {disabled_indicator};
+            border: 2px solid {disabled_border};
+        }}
+    """)
+
+
+def _style_toggle_radio_button(radio_button, is_dark_mode, is_enabled=None, spacing=7):
+    """Apply a smaller radio-button style that matches the blue toggle palette."""
+    if is_enabled is None:
+        is_enabled = radio_button.isEnabled()
+
+    if is_dark_mode:
+        text_color = "#FFFFFF" if is_enabled else "#808080"
+        indicator_border = "#8F8F8F"
+        indicator_background = "#F4F4F4"
+        hover_border = "#A8A8A8"
+        hover_background = "#FFFFFF"
+        checked_background = "#1976D2"
+        checked_border = "#42A5F5"
+        checked_hover_background = "#1E88E5"
+        checked_hover_border = "#64B5F6"
+        disabled_indicator = "#3A3A3A"
+        disabled_border = "#575757"
+    else:
+        text_color = "#000000" if is_enabled else "#AAAAAA"
+        indicator_border = "#9E9E9E"
+        indicator_background = "#FFFFFF"
+        hover_border = "#7E7E7E"
+        hover_background = "#FFFFFF"
+        checked_background = "#1976D2"
+        checked_border = "#42A5F5"
+        checked_hover_background = "#1E88E5"
+        checked_hover_border = "#64B5F6"
+        disabled_indicator = "#F0F0F0"
+        disabled_border = "#C4C4C4"
+
+    radio_button.setStyleSheet(f"""
+        QRadioButton {{
+            color: {text_color};
+            spacing: {spacing}px;
+            background-color: transparent;
+        }}
+        QRadioButton::indicator {{
+            width: 14px;
+            height: 14px;
+            min-width: 14px;
+            min-height: 14px;
+            border: 2px solid {indicator_border};
+            border-radius: 7px;
+            background-color: {indicator_background};
+        }}
+        QRadioButton::indicator:hover {{
+            border: 2px solid {hover_border};
+            background-color: {hover_background};
+        }}
+        QRadioButton::indicator:checked {{
+            background-color: {checked_background};
+            border: 2px solid {checked_border};
+        }}
+        QRadioButton::indicator:checked:hover {{
+            background-color: {checked_hover_background};
+            border: 2px solid {checked_hover_border};
+        }}
+        QRadioButton::indicator:disabled {{
+            background-color: {disabled_indicator};
+            border: 2px solid {disabled_border};
+        }}
+    """)
+
+
+class _BatchLayerStateManager:
+    """Minimal layer-state shim for batch JSON loading."""
+
+    def __init__(self):
+        self.layer_state = {"order": [], "shadow_overrides": {}}
+        self._connections = {}
+
+    def connect_layers(self, parent_layer, child_layer):
+        self._connections.setdefault(parent_layer, set()).add(child_layer)
+
+    def getConnections(self):
+        return {key: sorted(value) for key, value in self._connections.items()}
+
+
+class _BatchGroupPanel:
+    """No-op group panel used by batch rendering."""
+
+    def __init__(self):
+        self.groups_loaded_from_json = False
+
+    def create_group(self, _group_name, _group_strands):
+        return None
+
+    def refresh_group_alignment(self):
+        return None
+
+
+class _BatchGroupLayerManager:
+    """Minimal group manager wrapper for batch rendering."""
+
+    def __init__(self):
+        self.group_panel = _BatchGroupPanel()
+
+
+class _BatchLayerPanel:
+    """No-op layer panel to satisfy loader refresh hooks."""
+
+    def __init__(self):
+        self.set_counts = {}
+        self.current_set = 1
+
+    def refresh(self):
+        return None
+
+
+class _BatchRenderCanvas:
+    """Lightweight, non-QWidget canvas for batch deserialization and rendering."""
+
+    def __init__(self):
+        self.default_shadow_color = QColor(0, 0, 0, 150)
+        self.default_stroke_color = QColor(0, 0, 0, 255)
+        self.default_arrow_fill_color = QColor(0, 0, 0, 255)
+        self.use_default_arrow_color = False
+        self.num_steps = 2
+        self.max_blur_radius = 29.99
+        self.control_point_base_fraction = 1.0
+        self.distance_multiplier = 2.0
+        self.curve_response_exponent = 2.0
+        self.enable_third_control_point = True
+        self.enable_curvature_bias_control = False
+        self.highlight_color = Qt.red
+        self.zoom_factor = 1.0
+        self.pan_offset_x = 0
+        self.pan_offset_y = 0
+        self.current_mode = None
+        self._suppress_layer_panel_refresh = True
+        self._suppress_repaint = True
+        self.layer_panel = _BatchLayerPanel()
+        self.reset_scene()
+
+    def reset_scene(self):
+        self.strands = []
+        self.groups = {}
+        self.strand_colors = {}
+        self.selected_strand = None
+        self.selected_attached_strand = None
+        self.current_strand = None
+        self.show_grid = False
+        self.show_control_points = False
+        self.shadow_enabled = False
+        self.should_draw_names = False
+        self.group_layer_manager = _BatchGroupLayerManager()
+        self.layer_state_manager = _BatchLayerStateManager()
+
+    def update(self):
+        return None
+
+    def repaint(self):
+        return None
+
+
+def _get_alignment_base_output_dir(script_dir, m, n, k, direction, pattern_type):
+    """Return the output root used by Align Parallel exports."""
+    diagram_name = f"{m}x{n}"
+    return os.path.join(
+        script_dir,
+        "mxn", "mxn_output", diagram_name, f"k_{k}_{direction}_{pattern_type}"
+    )
+
+
+def _get_alignment_attempt_basename(
+    pattern_type,
+    m,
+    n,
+    k,
+    direction,
+    direction_type,
+    extension,
+    angle_deg,
+    is_valid,
+):
+    """Return the attempt_options basename used by Align Parallel exports."""
+    status = "valid" if is_valid else "invalid"
+    return (
+        f"{pattern_type}_{m}x{n}_k{k}_{direction}_{direction_type}_"
+        f"ext{extension}_ang{angle_deg:.1f}_{status}"
+    )
+
+
+def _get_alignment_final_output_info(
+    base_output_dir,
+    pattern_type,
+    m,
+    n,
+    k,
+    direction,
+    h_success,
+    h_angle,
+    v_success,
+    v_angle,
+):
+    """Return folder and basename for the final Align Parallel export."""
+    is_valid_solution = h_success and v_success
+    output_subdir = os.path.join(
+        base_output_dir,
+        "best_solution" if is_valid_solution else "partial_options",
+    )
+    h_status = f"h{h_angle:.1f}" if h_success and h_angle is not None else "h_fail"
+    v_status = f"v{v_angle:.1f}" if v_success and v_angle is not None else "v_fail"
+    filename_base = f"mxn_{pattern_type}_{m}x{n}_k{k}_{direction}_{h_status}_{v_status}"
+    return {
+        "is_valid_solution": is_valid_solution,
+        "output_subdir": output_subdir,
+        "filename_base": filename_base,
+    }
+
+
+def _build_alignment_summary_text(
+    pattern_type,
+    m,
+    n,
+    k,
+    direction,
+    h_success,
+    h_angle,
+    h_gap,
+    h_result,
+    v_success,
+    v_angle,
+    v_gap,
+    v_result,
+    parameters,
+):
+    """Build the final alignment summary text saved next to the PNG/JSON."""
+    is_valid_solution = h_success and v_success
+    lines = [
+        f"Pattern: {pattern_type.upper()} {m}x{n} k={k} {direction}",
+        f"Result: {'SOLUTION' if is_valid_solution else 'INVALID'}",
+        "=" * 60,
+        "",
+        "HORIZONTAL ALIGNMENT",
+        "-" * 40,
+    ]
+
+    if h_success:
+        lines.extend([
+            "Status: SUCCESS",
+            f"Angle: {h_angle:.2f}\N{DEGREE SIGN}",
+            f"Average gap: {h_gap:.2f} px",
+            f"Gap variance: {h_result.get('gap_variance', 'N/A')}",
+            f"First-last distance: {h_result.get('first_last_distance', 'N/A')}",
+            f"Pair extensions: {h_result.get('pair_extensions', 'N/A')}",
+        ])
+        for i, cfg in enumerate(h_result.get("configurations", [])):
+            name = cfg.get("strand", {}).get("strand_4_5", {}).get("layer_name", f"strand_{i}")
+            ext = cfg.get("extension", 0)
+            length = cfg.get("length", 0)
+            lines.append(f"  {name}: extension={ext:.1f}px, length={length:.1f}px")
+    else:
+        lines.extend([
+            "Status: FAILED",
+            f"Message: {h_result.get('message', 'Unknown')}",
+        ])
+
+    lines.extend([
+        "",
+        "VERTICAL ALIGNMENT",
+        "-" * 40,
+    ])
+
+    if v_success:
+        lines.extend([
+            "Status: SUCCESS",
+            f"Angle: {v_angle:.2f}\N{DEGREE SIGN}",
+            f"Average gap: {v_gap:.2f} px",
+            f"Gap variance: {v_result.get('gap_variance', 'N/A')}",
+            f"First-last distance: {v_result.get('first_last_distance', 'N/A')}",
+            f"Pair extensions: {v_result.get('pair_extensions', 'N/A')}",
+        ])
+        for i, cfg in enumerate(v_result.get("configurations", [])):
+            name = cfg.get("strand", {}).get("strand_4_5", {}).get("layer_name", f"strand_{i}")
+            ext = cfg.get("extension", 0)
+            length = cfg.get("length", 0)
+            lines.append(f"  {name}: extension={ext:.1f}px, length={length:.1f}px")
+    else:
+        lines.extend([
+            "Status: FAILED",
+            f"Message: {v_result.get('message', 'Unknown')}",
+        ])
+
+    lines.extend([
+        "",
+        "HORIZONTAL REFERENCE (for vertical context)",
+        "-" * 40,
+        f"H angle: {h_angle:.2f}\N{DEGREE SIGN}" if h_angle is not None else "H angle: N/A",
+        f"H gap: {h_gap:.2f} px" if h_gap is not None else "H gap: N/A",
+        f"H success: {h_success}",
+        "",
+        "PARAMETERS",
+        "-" * 40,
+        f"H angle range: {parameters.get('h_angle_range_text', 'N/A')}",
+        f"V angle range: {parameters.get('v_angle_range_text', 'N/A')}",
+        f"Custom angles: {parameters.get('custom_angles', False)}",
+        f"Pair ext max: {parameters.get('pair_ext_max', 'N/A')}px",
+        f"Pair ext step: {parameters.get('pair_ext_step', 'N/A')}px",
+        f"Max extension: {parameters.get('max_extension', 'N/A')}px",
+        f"Angle step: {parameters.get('angle_step', 'N/A')}\N{DEGREE SIGN}",
+        f"Strand width: {parameters.get('strand_width', 'N/A')}px",
+    ])
+
+    return "\n".join(lines) + "\n"
+
+
+def _build_alignment_attempt_text(
+    pattern_type,
+    m,
+    n,
+    k,
+    direction,
+    angle_deg,
+    extension,
+    result,
+    direction_type,
+    attempt_num,
+    h_result_info=None,
+):
+    """Build a concise attempt report for attempt_options exports."""
+    configs = result.get("configurations")
+    if not configs and result.get("fallback"):
+        configs = result["fallback"].get("configurations")
+
+    data_source = result if result.get("configurations") else result.get("fallback", result)
+    gaps = data_source.get("gaps", [])
+    signed_gaps = data_source.get("signed_gaps", [])
+    is_valid = bool(result.get("valid", False))
+    dir_label = "HORIZONTAL" if direction_type == "horizontal" else "VERTICAL"
+
+    lines = [
+        "=" * 80,
+        "                    PARALLEL ALIGNMENT ANALYSIS",
+        "=" * 80,
+        f"Pattern: {pattern_type.upper()} {m}x{n} | K: {k} | Direction: {direction.upper()}",
+        (
+            f"Attempt: #{attempt_num} | Angle: {angle_deg:.1f}\N{DEGREE SIGN} | "
+            f"Extension: {extension}px | Status: {'VALID' if is_valid else 'INVALID'}"
+        ),
+        f"Direction: {dir_label}",
+        "",
+        f"Reason: {result.get('reason') or result.get('message') or 'N/A'}",
+        f"Average gap: {data_source.get('average_gap', 'N/A')}",
+        f"Gap variance: {data_source.get('gap_variance', 'N/A')}",
+        f"Min gap: {data_source.get('min_gap', 'N/A')}",
+        f"Max gap: {data_source.get('max_gap', 'N/A')}",
+        f"Gaps: {gaps if gaps else '[]'}",
+        f"Signed gaps: {signed_gaps if signed_gaps else '[]'}",
+        "",
+        "CONFIGURATIONS",
+        "-" * 40,
+    ]
+
+    if configs:
+        for i, cfg in enumerate(configs):
+            name = cfg.get("strand", {}).get("strand_4_5", {}).get("layer_name", f"strand_{i}")
+            ext = cfg.get("extension", 0)
+            length = cfg.get("length", 0)
+            start = cfg.get("extended_start", {})
+            end = cfg.get("end", {})
+            lines.append(
+                f"{name}: extension={ext:.1f}px, length={length:.1f}px, "
+                f"start=({start.get('x', 'N/A')}, {start.get('y', 'N/A')}), "
+                f"end=({end.get('x', 'N/A')}, {end.get('y', 'N/A')})"
+            )
+    else:
+        lines.append("No configurations available.")
+
+    if direction_type == "vertical" and h_result_info is not None:
+        lines.extend([
+            "",
+            "HORIZONTAL RESULT USED (Best from horizontal phase)",
+            "-" * 40,
+            f"Status: {'SUCCESS' if h_result_info.get('success') else 'FAILED/FALLBACK'}",
+            f"Angle: {h_result_info.get('angle', 'N/A')}",
+            f"Average Gap: {h_result_info.get('avg_gap', 'N/A')}",
+            f"Gap Variance: {h_result_info.get('gap_variance', 'N/A')}",
+            f"First-Last Distance: {h_result_info.get('first_last_distance', 'N/A')}",
+            f"Pair Extensions: {h_result_info.get('pair_extensions', 'N/A')}",
+        ])
+
+    lines.extend([
+        "",
+        "=" * 80,
+        f"Overall: {'VALID SOLUTION' if is_valid else 'INVALID'}",
+        "=" * 80,
+    ])
+    return "\n".join(lines) + "\n"
 
 
 class ImagePreviewWidget(QLabel):
@@ -231,7 +804,7 @@ class BatchWorker(QThread):
         self.combinations = combinations
         self.params = params
         self._stop_requested = False
-        self._main_window = None
+        self._render_canvas = None
 
     def request_stop(self):
         self._stop_requested = True
@@ -239,38 +812,22 @@ class BatchWorker(QThread):
     def _log(self, msg):
         self.log_message.emit(msg)
 
-    def _get_main_window(self):
-        if self._main_window is None:
-            app = QApplication.instance()
-            original_stylesheet = app.styleSheet() if app else ""
+    def _get_render_canvas(self):
+        if self._render_canvas is None:
             try:
-                from openstrandstudio.src.main_window import MainWindow
-                self._main_window = MainWindow()
-                self._main_window.hide()
-                self._main_window.canvas.hide()
-                # Suppress UI side effects for batch mode
-                self._main_window.canvas._suppress_layer_panel_refresh = True
-                self._main_window.canvas._suppress_repaint = True
+                self._render_canvas = _BatchRenderCanvas()
             except Exception as e:
-                self._log(f"ERROR: Failed to create MainWindow: {e}")
+                self._log(f"ERROR: Failed to create batch render canvas: {e}")
                 return None
-            finally:
-                if app is not None:
-                    app.setStyleSheet(original_stylesheet)
-        return self._main_window
+        return self._render_canvas
 
     def _load_json_to_canvas(self, json_content):
         from openstrandstudio.src.save_load_manager import load_strands_from_data, apply_loaded_strands
 
-        main_window = self._get_main_window()
-        if not main_window:
+        canvas = self._get_render_canvas()
+        if not canvas:
             return None
-        canvas = main_window.canvas
-
-        canvas.strands = []
-        canvas.strand_colors = {}
-        canvas.selected_strand = None
-        canvas.current_strand = None
+        canvas.reset_scene()
 
         data = json.loads(json_content)
         current_state = _get_active_history_state(data)
@@ -317,18 +874,17 @@ class BatchWorker(QThread):
         return QRectF(min_x - padding, min_y - padding,
                       max_x - min_x + 2 * padding, max_y - min_y + 2 * padding)
 
-    def _render_image(self, bounds, scale_factor):
+    def _render_image(self, bounds, scale_factor, transparent):
         from openstrandstudio.src.render_utils import RenderUtils
 
-        main_window = self._get_main_window()
-        if not main_window:
+        canvas = self._get_render_canvas()
+        if not canvas:
             return None
-        canvas = main_window.canvas
 
         w = int(bounds.width() * scale_factor)
         h = int(bounds.height() * scale_factor)
         image = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
-        image.fill(Qt.white)
+        image.fill(Qt.transparent if transparent else Qt.white)
 
         painter = QPainter(image)
         RenderUtils.setup_painter(painter, enable_high_quality=True)
@@ -343,22 +899,41 @@ class BatchWorker(QThread):
         painter.end()
         return image
 
-    def _render_batch_overlays(self, canvas, bounds, base_image, scale_factor,
-                               m, n, k, direction,
-                               draw_emojis, draw_strand_names, draw_arrows):
-        from openstrandstudio.src.render_utils import RenderUtils
-
-        w = base_image.width()
-        h = base_image.height()
-
-        emoji_settings = {
+    @staticmethod
+    def _build_batch_emoji_settings(
+        draw_emojis,
+        draw_strand_names,
+        draw_arrows,
+        k,
+        direction,
+        transparent,
+    ):
+        return {
             "show": draw_emojis,
             "show_strand_names": draw_strand_names,
             "show_rotation_indicator": draw_arrows,
             "k": k,
             "direction": direction,
-            "transparent": True,
+            "transparent": transparent,
         }
+
+    def _render_batch_overlays(self, canvas, bounds, base_image, scale_factor,
+                               m, n, k, direction,
+                               draw_emojis, draw_strand_names, draw_arrows,
+                               transparent):
+        from openstrandstudio.src.render_utils import RenderUtils
+
+        w = base_image.width()
+        h = base_image.height()
+
+        emoji_settings = self._build_batch_emoji_settings(
+            draw_emojis,
+            draw_strand_names,
+            draw_arrows,
+            k,
+            direction,
+            transparent,
+        )
 
         overlay = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
         overlay.fill(Qt.transparent)
@@ -385,9 +960,48 @@ class BatchWorker(QThread):
 
         return base_image
 
-    def run(self):
-        from concurrent.futures import ThreadPoolExecutor
+    def _render_json_image(
+        self,
+        json_content,
+        scale_factor,
+        m,
+        n,
+        k,
+        direction,
+        draw_emojis,
+        draw_strand_names,
+        draw_arrows,
+        transparent,
+    ):
+        bounds = self._load_json_to_canvas(json_content)
+        if not bounds:
+            return None
 
+        image = self._render_image(bounds, scale_factor, transparent)
+        if image is None or image.isNull():
+            return image
+
+        if draw_emojis or draw_strand_names or draw_arrows:
+            canvas = self._get_render_canvas()
+            if canvas:
+                image = self._render_batch_overlays(
+                    canvas,
+                    bounds,
+                    image,
+                    scale_factor,
+                    m,
+                    n,
+                    k,
+                    direction,
+                    draw_emojis,
+                    draw_strand_names,
+                    draw_arrows,
+                    transparent,
+                )
+
+        return image
+
+    def run(self):
         p = self.params
         combinations = self.combinations
         total = len(combinations)
@@ -398,11 +1012,12 @@ class BatchWorker(QThread):
         use_gpu = p['use_gpu']
         scale_factor = p['scale_factor']
         custom_colors = p['custom_colors']
-        save_extra_outputs = p['save_extra_outputs']
+        save_horizontal_valid = p['save_horizontal_valid']
         save_pre_align = p['save_pre_align']
         draw_emojis = p['draw_emojis']
         draw_strand_names = p['draw_strand_names']
         draw_arrows = p['draw_arrows']
+        transparent = p['transparent']
         base_dir = p['base_dir']
 
         self._emoji_renderer = p['emoji_renderer']
@@ -410,9 +1025,6 @@ class BatchWorker(QThread):
         saved = 0
         skipped = 0
         errors = 0
-
-        io_pool = ThreadPoolExecutor(max_workers=2)
-        pending_futures = []
 
         for idx, (m, n, k, direction, hand) in enumerate(combinations):
             if self._stop_requested:
@@ -427,6 +1039,20 @@ class BatchWorker(QThread):
 
             try:
                 self._log(f"[{idx + 1}/{total}] {hand.upper()} {m}x{n} k={k} {direction.upper()}")
+                if hasattr(self._emoji_renderer, "unfreeze_emoji_assignments"):
+                    self._emoji_renderer.unfreeze_emoji_assignments()
+
+                pattern_type = hand
+                base_output_dir = _get_alignment_base_output_dir(
+                    base_dir,
+                    m,
+                    n,
+                    k,
+                    direction,
+                    pattern_type,
+                )
+                attempt_dir = os.path.join(base_output_dir, "attempt_options")
+                os.makedirs(attempt_dir, exist_ok=True)
 
                 # --- Step 1: Generate continuation JSON ---
                 if hand == "lh":
@@ -458,11 +1084,109 @@ class BatchWorker(QThread):
                     align_v_fn = align_vertical_strands_parallel_rh
                     apply_fn = apply_parallel_alignment_rh
 
+                if draw_emojis or draw_strand_names or draw_arrows:
+                    bounds = self._load_json_to_canvas(cont_json)
+                    canvas = self._get_render_canvas()
+                    if bounds and canvas and hasattr(self._emoji_renderer, "freeze_emoji_assignments"):
+                        self._emoji_renderer.freeze_emoji_assignments(
+                            canvas,
+                            bounds,
+                            m,
+                            n,
+                            self._build_batch_emoji_settings(
+                                draw_emojis,
+                                draw_strand_names,
+                                draw_arrows,
+                                k,
+                                direction,
+                                transparent,
+                            ),
+                        )
+
+                h_result = {}
+                v_result = {}
+                attempt_count = [0]
+                h_attempt_count = [0]
+                v_attempt_count = [0]
+                best_h_result_info = [None]
+
+                def save_attempt_callback(angle_deg, extension, result, direction_type):
+                    attempt_count[0] += 1
+                    if direction_type == "horizontal":
+                        h_attempt_count[0] += 1
+                    else:
+                        v_attempt_count[0] += 1
+
+                    is_valid = bool(result.get("valid", False))
+                    if direction_type == "horizontal" and is_valid and not save_horizontal_valid:
+                        return
+
+                    base_filename = _get_alignment_attempt_basename(
+                        pattern_type,
+                        m,
+                        n,
+                        k,
+                        direction,
+                        direction_type,
+                        extension,
+                        angle_deg,
+                        is_valid,
+                    )
+
+                    configs = result.get("configurations")
+                    if not configs and result.get("fallback"):
+                        configs = result["fallback"].get("configurations")
+
+                    attempt_strands = copy.deepcopy(strands)
+                    if configs:
+                        attempt_result = {"success": True, "configurations": configs}
+                        attempt_strands = apply_fn(attempt_strands, attempt_result)
+
+                    attempt_data = copy.deepcopy(data)
+                    _set_active_strands(attempt_data, attempt_strands)
+                    attempt_json = json.dumps(attempt_data, separators=(',', ':'))
+
+                    attempt_scale = scale_factor if is_valid else scale_factor * 0.0625
+                    image = self._render_json_image(
+                        attempt_json,
+                        attempt_scale,
+                        m,
+                        n,
+                        k,
+                        direction,
+                        draw_emojis,
+                        draw_strand_names,
+                        draw_arrows,
+                        transparent,
+                    )
+                    if image and not image.isNull():
+                        image.save(os.path.join(attempt_dir, base_filename + ".png"))
+
+                    with open(os.path.join(attempt_dir, base_filename + ".json"), 'w', encoding='utf-8') as f:
+                        f.write(attempt_json)
+
+                    attempt_text = _build_alignment_attempt_text(
+                        pattern_type,
+                        m,
+                        n,
+                        k,
+                        direction,
+                        angle_deg,
+                        extension,
+                        result,
+                        direction_type,
+                        attempt_count[0],
+                        h_result_info=best_h_result_info[0] if direction_type == "vertical" else None,
+                    )
+                    with open(os.path.join(attempt_dir, base_filename + ".txt"), 'w', encoding='utf-8') as f:
+                        f.write(attempt_text)
+
                 # --- Step 4: Horizontal alignment ---
                 h_result = align_h_fn(
                     strands, n,
                     angle_step_degrees=0.5,
                     max_extension=100.0,
+                    on_config_callback=save_attempt_callback,
                     max_pair_extension=pair_ext_max,
                     pair_extension_step=pair_ext_step,
                     m=m, k=k, direction=direction,
@@ -477,13 +1201,32 @@ class BatchWorker(QThread):
                     h_gap = h_result.get("average_gap", 0)
                     self._log(f"  H: {'OK' if h_success else 'fallback'} angle={h_angle:.1f} gap={h_gap:.1f}px")
                 else:
+                    h_angle = None
+                    h_gap = None
                     self._log(f"  H: FAILED - {h_result.get('message', '')}")
+
+                h_info = {
+                    'success': h_result.get("success", False),
+                    'angle': f"{h_result.get('angle_degrees', 0):.2f}°",
+                    'avg_gap': f"{h_result.get('average_gap', 0):.2f} px",
+                    'gap_variance': h_result.get('gap_variance', 'N/A'),
+                    'first_last_distance': h_result.get('first_last_distance', 'N/A'),
+                    'pair_extensions': h_result.get('pair_extensions', 'N/A'),
+                    'strand_details': [],
+                }
+                for cfg in h_result.get("configurations", []):
+                    name = cfg.get("strand", {}).get("strand_4_5", {}).get("layer_name", "unknown")
+                    ext = cfg.get("extension", 0)
+                    length = cfg.get("length", 0)
+                    h_info['strand_details'].append({'name': name, 'extension': ext, 'length': length})
+                best_h_result_info[0] = h_info
 
                 # --- Step 5: Vertical alignment ---
                 v_result = align_v_fn(
                     strands, n, m,
                     angle_step_degrees=0.5,
                     max_extension=100.0,
+                    on_config_callback=save_attempt_callback,
                     max_pair_extension=pair_ext_max,
                     pair_extension_step=pair_ext_step,
                     k=k, direction=direction,
@@ -498,6 +1241,8 @@ class BatchWorker(QThread):
                     v_gap = v_result.get("average_gap", 0)
                     self._log(f"  V: {'OK' if v_success else 'fallback'} angle={v_angle:.1f} gap={v_gap:.1f}px")
                 else:
+                    v_angle = None
+                    v_gap = None
                     self._log(f"  V: FAILED - {v_result.get('message', '')}")
 
                 # --- Step 6: Update strands in data ---
@@ -506,73 +1251,74 @@ class BatchWorker(QThread):
                 aligned_json = json.dumps(data, indent=2)
 
                 # --- Step 7: Save outputs ---
-                is_valid = h_success and v_success
-                diagram_name = f"{m}x{n}"
-                base_output_dir = os.path.join(
-                    base_dir, "mxn", "mxn_output", diagram_name,
-                    f"k_{k}_{direction}_{hand}"
+                output_info = _get_alignment_final_output_info(
+                    base_output_dir,
+                    pattern_type,
+                    m,
+                    n,
+                    k,
+                    direction,
+                    h_success,
+                    h_angle,
+                    v_success,
+                    v_angle,
+                )
+                os.makedirs(output_info["output_subdir"], exist_ok=True)
+
+                image = self._render_json_image(
+                    aligned_json,
+                    scale_factor,
+                    m,
+                    n,
+                    k,
+                    direction,
+                    draw_emojis,
+                    draw_strand_names,
+                    draw_arrows,
+                    transparent,
                 )
 
-                h_tag = f"h{h_result.get('angle_degrees', 0):.1f}" if h_success else "h_fail"
-                v_tag = f"v{v_result.get('angle_degrees', 0):.1f}" if v_success else "v_fail"
-                fname = f"mxn_{hand}_{m}x{n}_k{k}_{direction}_{h_tag}_{v_tag}"
+                filename_base = output_info["filename_base"]
+                output_dir = output_info["output_subdir"]
+                if image and not image.isNull():
+                    image.save(os.path.join(output_dir, filename_base + ".png"))
 
-                # Decide which folders to save into
-                save_dirs = []
-                if is_valid:
-                    save_dirs.append(os.path.join(base_output_dir, "best_solution"))
-                    if save_extra_outputs:
-                        save_dirs.append(os.path.join(base_output_dir, "valid_options"))
-                else:
-                    if save_extra_outputs:
-                        save_dirs.append(os.path.join(base_output_dir, "partial_options"))
+                with open(os.path.join(output_dir, filename_base + ".json"), 'w', encoding='utf-8') as f:
+                    f.write(aligned_json)
 
-                if not save_dirs:
-                    self._log("  -> skipped (partial result, extra output folders disabled)")
-                    skipped += 1
-                    continue
+                summary_text = _build_alignment_summary_text(
+                    pattern_type,
+                    m,
+                    n,
+                    k,
+                    direction,
+                    h_success,
+                    h_angle,
+                    h_gap,
+                    h_result,
+                    v_success,
+                    v_angle,
+                    v_gap,
+                    v_result,
+                    {
+                        "h_angle_range_text": f"AUTO ({angle_mode})",
+                        "v_angle_range_text": f"AUTO ({angle_mode})",
+                        "custom_angles": False,
+                        "pair_ext_max": pair_ext_max,
+                        "pair_ext_step": pair_ext_step,
+                        "max_extension": 100.0,
+                        "angle_step": 0.5,
+                        "strand_width": 46,
+                    },
+                )
+                with open(os.path.join(output_dir, filename_base + ".txt"), 'w', encoding='utf-8') as f:
+                    f.write(summary_text)
 
-                # Render the image once
-                bounds = self._load_json_to_canvas(aligned_json)
-                image = None
-                if bounds:
-                    image = self._render_image(bounds, scale_factor)
-                    if image and not image.isNull() and (draw_emojis or draw_strand_names or draw_arrows):
-                        main_window = self._get_main_window()
-                        if main_window:
-                            image = self._render_batch_overlays(
-                                main_window.canvas, bounds, image, scale_factor,
-                                m, n, k, direction,
-                                draw_emojis, draw_strand_names, draw_arrows,
-                            )
-
-                # Save to each target folder (async via thread pool)
-                for output_dir in save_dirs:
-                    os.makedirs(output_dir, exist_ok=True)
-                    # Submit JSON write
-                    json_path = os.path.join(output_dir, f"{fname}.json")
-                    json_data = aligned_json
-                    pending_futures.append(
-                        io_pool.submit(self._write_file, json_path, json_data)
-                    )
-                    # Submit PNG save
-                    if image and not image.isNull():
-                        png_path = os.path.join(output_dir, f"{fname}.png")
-                        img_copy = image.copy()
-                        pending_futures.append(
-                            io_pool.submit(img_copy.save, png_path)
-                        )
-
-                # Periodically drain completed futures to catch errors
-                if len(pending_futures) > 20:
-                    done = [f for f in pending_futures if f.done()]
-                    for f in done:
-                        f.result()
-                        pending_futures.remove(f)
-
-                result_str = "VALID" if is_valid else "partial"
-                folders_str = " + ".join(os.path.basename(d) for d in save_dirs)
-                self._log(f"  -> {result_str} | saved to .../{diagram_name}/k_{k}_{direction}_{hand}/ [{folders_str}]")
+                result_label = "SOLUTION" if output_info["is_valid_solution"] else "PARTIAL"
+                self._log(
+                    f"  -> {result_label} | saved to .../{m}x{n}/k_{k}_{direction}_{hand}/ "
+                    f"[{os.path.basename(output_dir)}] | attempts H={h_attempt_count[0]} V={v_attempt_count[0]}"
+                )
                 saved += 1
 
             except Exception as e:
@@ -580,21 +1326,11 @@ class BatchWorker(QThread):
                 traceback.print_exc()
                 self._log(f"  ERROR: {e}")
                 errors += 1
-
-        # Drain all remaining futures
-        for f in pending_futures:
-            try:
-                f.result()
-            except Exception as e:
-                self._log(f"  I/O ERROR: {e}")
-        io_pool.shutdown(wait=True)
+            finally:
+                if hasattr(self._emoji_renderer, "unfreeze_emoji_assignments"):
+                    self._emoji_renderer.unfreeze_emoji_assignments()
 
         self.finished_batch.emit(saved, skipped, errors, total)
-
-    @staticmethod
-    def _write_file(path, content):
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(content)
 
     @staticmethod
     def _apply_colors_to_json(json_content, custom_colors):
@@ -791,13 +1527,19 @@ class FullAutoDialog(QDialog):
         self.use_gpu_cb.setChecked(False)
         align_lay.addWidget(self.use_gpu_cb, 3, 0, 1, 2)
 
-        self.save_all_valid_folders_cb = QCheckBox("Save extra output folders")
-        self.save_all_valid_folders_cb.setChecked(True)
-        self.save_all_valid_folders_cb.setToolTip(
-            "When checked, fully valid results also save to valid_options and partial\n"
-            "results save to partial_options. When unchecked, only best_solution is kept."
+        self.save_horizontal_valid_cb = QCheckBox("Save horizontal valid images/txt/json")
+        self.save_horizontal_valid_cb.setChecked(
+            self.parent_dialog.save_horizontal_valid_cb.isChecked()
+            if (
+                self.parent_dialog
+                and hasattr(self.parent_dialog, "save_horizontal_valid_cb")
+            )
+            else True
         )
-        align_lay.addWidget(self.save_all_valid_folders_cb, 4, 0, 1, 2)
+        self.save_horizontal_valid_cb.setToolTip(
+            "When enabled, valid horizontal alignment attempts are exported to the attempt_options folder"
+        )
+        align_lay.addWidget(self.save_horizontal_valid_cb, 4, 0, 1, 2)
 
         self.save_pre_align_cb = QCheckBox("Save pre-alignment JSON")
         self.save_pre_align_cb.setChecked(False)
@@ -825,17 +1567,35 @@ class FullAutoDialog(QDialog):
         overlay_lay.addLayout(emoji_set_row)
 
         self.batch_show_emojis_cb = QCheckBox("Show emoji markers")
-        self.batch_show_emojis_cb.setChecked(False)
+        self.batch_show_emojis_cb.setChecked(
+            bool(
+                self.parent_dialog
+                and hasattr(self.parent_dialog, "show_emojis_checkbox")
+                and self.parent_dialog.show_emojis_checkbox.isChecked()
+            )
+        )
         self.batch_show_emojis_cb.setToolTip("Draw animal emoji markers at strand endpoints")
         overlay_lay.addWidget(self.batch_show_emojis_cb)
 
         self.batch_show_strand_names_cb = QCheckBox("Show strand names")
-        self.batch_show_strand_names_cb.setChecked(False)
+        self.batch_show_strand_names_cb.setChecked(
+            bool(
+                self.parent_dialog
+                and hasattr(self.parent_dialog, "show_strand_names_checkbox")
+                and self.parent_dialog.show_strand_names_checkbox.isChecked()
+            )
+        )
         self.batch_show_strand_names_cb.setToolTip("Show strand names like '3_2(s)' at each endpoint")
         overlay_lay.addWidget(self.batch_show_strand_names_cb)
 
         self.batch_show_arrows_cb = QCheckBox("Show rotation arrow + numbers")
-        self.batch_show_arrows_cb.setChecked(False)
+        self.batch_show_arrows_cb.setChecked(
+            bool(
+                self.parent_dialog
+                and hasattr(self.parent_dialog, "show_emojis_checkbox")
+                and self.parent_dialog.show_emojis_checkbox.isChecked()
+            )
+        )
         self.batch_show_arrows_cb.setToolTip("Draw rotation direction arrow and number labels")
         overlay_lay.addWidget(self.batch_show_arrows_cb)
 
@@ -955,10 +1715,24 @@ class FullAutoDialog(QDialog):
 
         main_layout.addWidget(left_scroll)
         main_layout.addWidget(right_panel, 1)
+        self._initialize_toggle_checkboxes()
 
     # ------------------------------------------------------------------
     # Theme
     # ------------------------------------------------------------------
+
+    def _iter_toggle_checkboxes(self):
+        return self.findChildren(QCheckBox)
+
+    def _initialize_toggle_checkboxes(self):
+        for checkbox in self._iter_toggle_checkboxes():
+            _apply_large_checkbox_indicator(checkbox, indicator_size=14)
+            _install_custom_checkbox_checkmark(checkbox)
+
+    def _restyle_toggle_checkboxes(self):
+        is_dark_mode = (self.theme == 'dark')
+        for checkbox in self._iter_toggle_checkboxes():
+            _style_toggle_checkbox(checkbox, is_dark_mode, checkbox.isEnabled())
 
     def _apply_theme(self):
         if self.theme == 'dark':
@@ -1018,6 +1792,7 @@ class FullAutoDialog(QDialog):
                 QPushButton:pressed { background-color: #D0D0D0; }
                 QPushButton:disabled { background-color: #F0F0F0; color: #AAAAAA; }
             """)
+        self._restyle_toggle_checkboxes()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1306,7 +2081,7 @@ class FullAutoDialog(QDialog):
         use_gpu = self.use_gpu_cb.isChecked()
         scale_factor = self.scale_combo.currentData()
         custom_colors = self._get_colors_from_parent()
-        save_extra_outputs = self.save_all_valid_folders_cb.isChecked()
+        save_horizontal_valid = self.save_horizontal_valid_cb.isChecked()
         save_pre_align = self.save_pre_align_cb.isChecked()
 
         # Overlay flags
@@ -1335,6 +2110,7 @@ class FullAutoDialog(QDialog):
         self._log(f"  Angle mode: {angle_mode}")
         self._log(f"  Pair ext max: {pair_ext_max}px, step: {pair_ext_step}px")
         self._log(f"  GPU: {'Yes' if use_gpu else 'No'}")
+        self._log(f"  Save horizontal valid attempts: {'Yes' if save_horizontal_valid else 'No'}")
         self._log("")
 
         self.progress_bar.setMaximum(total)
@@ -1346,11 +2122,16 @@ class FullAutoDialog(QDialog):
             'use_gpu': use_gpu,
             'scale_factor': scale_factor,
             'custom_colors': custom_colors,
-            'save_extra_outputs': save_extra_outputs,
+            'save_horizontal_valid': save_horizontal_valid,
             'save_pre_align': save_pre_align,
             'draw_emojis': draw_emojis,
             'draw_strand_names': draw_strand_names,
             'draw_arrows': draw_arrows,
+            'transparent': (
+                self.parent_dialog.transparent_checkbox.isChecked()
+                if self.parent_dialog and hasattr(self.parent_dialog, "transparent_checkbox")
+                else True
+            ),
             'base_dir': os.path.dirname(os.path.abspath(__file__)),
             'emoji_renderer': self._emoji_renderer,
         }
@@ -1657,6 +2438,34 @@ class MxNGeneratorDialog(QDialog):
         left_scroll.setMinimumWidth(440)
         main_layout.addWidget(left_scroll)
         main_layout.addWidget(right_panel, 1)  # Give preview more space
+        self._initialize_toggle_checkboxes()
+        self._initialize_radio_buttons()
+
+    def _iter_toggle_checkboxes(self):
+        return self.findChildren(QCheckBox)
+
+    def _iter_radio_buttons(self):
+        return self.findChildren(QRadioButton)
+
+    def _initialize_toggle_checkboxes(self):
+        for checkbox in self._iter_toggle_checkboxes():
+            _apply_large_checkbox_indicator(checkbox, indicator_size=14)
+            _install_custom_checkbox_checkmark(checkbox)
+
+    def _initialize_radio_buttons(self):
+        for radio_button in self._iter_radio_buttons():
+            _apply_radio_indicator_size(radio_button, indicator_size=14)
+            _install_custom_radio_inner_dot(radio_button)
+
+    def _restyle_toggle_checkboxes(self):
+        is_dark_mode = (self.theme == 'dark')
+        for checkbox in self._iter_toggle_checkboxes():
+            _style_toggle_checkbox(checkbox, is_dark_mode, checkbox.isEnabled())
+
+    def _restyle_radio_buttons(self):
+        is_dark_mode = (self.theme == 'dark')
+        for radio_button in self._iter_radio_buttons():
+            _style_toggle_radio_button(radio_button, is_dark_mode, radio_button.isEnabled())
 
     def _setup_grid_size_section(self, parent_layout):
         """Create grid size M x N spinboxes."""
@@ -2145,7 +2954,6 @@ class MxNGeneratorDialog(QDialog):
         # GPU toggle checkbox
         self.use_gpu_cb = QCheckBox("Use GPU (CuPy)")
         self.use_gpu_cb.setChecked(False)
-        self.use_gpu_cb.setStyleSheet("color: #4fc3f7; font-size: 11px;")
         self.use_gpu_cb.toggled.connect(self._on_gpu_toggle_changed)
         parent_layout.addWidget(self.use_gpu_cb)
 
@@ -2160,7 +2968,6 @@ class MxNGeneratorDialog(QDialog):
         self.save_horizontal_valid_cb.setToolTip(
             "When enabled, valid horizontal alignment attempts are exported to the attempt_options folder"
         )
-        self.save_horizontal_valid_cb.setStyleSheet("color: #c5e1a5; font-size: 11px;")
         self.save_horizontal_valid_cb.stateChanged.connect(self._auto_save_alignment_preset)
         parent_layout.addWidget(self.save_horizontal_valid_cb)
 
@@ -5178,6 +5985,8 @@ class MxNGeneratorDialog(QDialog):
                     color: #AAAAAA;
                 }
             """)
+        self._restyle_toggle_checkboxes()
+        self._restyle_radio_buttons()
 
     def _style_color_dialog(self, dialog):
         """Apply theme styling to QColorDialog."""
