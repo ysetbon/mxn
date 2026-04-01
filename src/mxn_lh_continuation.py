@@ -2572,15 +2572,54 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
     return best_result
 
 
-def _select_best_result(valid_results, distance_tolerance=2.0):
+def _total_extension(result):
+    """Sum of all pair extensions for a result."""
+    exts = result.get("pair_extensions", (0,))
+    return sum(exts)
+
+
+def _select_best_result(valid_results, distance_tolerance=2.0,
+                        single_gap_distance_tolerance=6.0):
     """
     Select best result using tiered priority:
     1. Smallest first-last distance (within distance_tolerance px)
     2. Lowest gap variance within that distance group
     3. If only 1 result at smallest distance, also compare with next group
+
+    Special case: when all results have only a single gap (len(gaps) <= 1),
+    variance is always 0 and distance differences are tiny.  In that case,
+    widen the acceptable distance range and prefer the result with the
+    lowest total extension (less strand deformation).
     """
     if not valid_results:
         return None
+
+    # Detect single-gap case: all results have 0 or 1 gap
+    all_single_gap = all(len(r.get("gaps", [])) <= 1 for r in valid_results)
+
+    if all_single_gap:
+        # Sort by first_last_distance to find the acceptable range
+        sorted_results = sorted(
+            valid_results,
+            key=lambda r: r.get("first_last_distance", float('inf'))
+        )
+        smallest_dist = sorted_results[0].get("first_last_distance", float('inf'))
+
+        # Accept all results within a wider tolerance (gap still near target)
+        acceptable = [r for r in sorted_results
+                      if r.get("first_last_distance", float('inf'))
+                      <= smallest_dist + single_gap_distance_tolerance]
+
+        # Among acceptable results, prefer lowest total extension
+        best = min(acceptable, key=lambda r: _total_extension(r))
+        best_ext = _total_extension(best)
+        best_dist = best.get("first_last_distance", float('inf'))
+        print(f"  Selection (single-gap): {len(acceptable)} results in acceptable range "
+              f"(dist <= {smallest_dist + single_gap_distance_tolerance:.1f}px), "
+              f"best: dist={best_dist:.1f}px, total_ext={best_ext}px")
+        return best
+
+    # --- Normal multi-gap path (unchanged) ---
 
     # Sort by first_last_distance
     sorted_results = sorted(
