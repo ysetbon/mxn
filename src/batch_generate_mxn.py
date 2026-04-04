@@ -253,27 +253,17 @@ class BatchGenerator:
                 k_values = self.get_k_values(m, n)
                 print(f"\n=== {m}x{n} ({len(k_values)} k values: {k_values[0]} to {k_values[-1]}) ===")
 
-                if m == n:
-                    # Square grid: LH with CW, RH with CCW
-                    for k in k_values:
-                        if self.generate_pattern(m, n, k, "cw", "lh", folder):
-                            total_generated += 1
-                        else:
-                            total_errors += 1
+                # LH always CW, RH always CCW
+                for k in k_values:
+                    if self.generate_pattern(m, n, k, "cw", "lh", folder):
+                        total_generated += 1
+                    else:
+                        total_errors += 1
 
-                        if self.generate_pattern(m, n, k, "ccw", "rh", folder):
-                            total_generated += 1
-                        else:
-                            total_errors += 1
-                else:
-                    # Non-square: both LH and RH with both CW and CCW
-                    for k in k_values:
-                        for pattern_type in ["lh", "rh"]:
-                            for direction in ["cw", "ccw"]:
-                                if self.generate_pattern(m, n, k, direction, pattern_type, folder):
-                                    total_generated += 1
-                                else:
-                                    total_errors += 1
+                    if self.generate_pattern(m, n, k, "ccw", "rh", folder):
+                        total_generated += 1
+                    else:
+                        total_errors += 1
 
         print(f"\n=== COMPLETE ===")
         print(f"Generated: {total_generated}")

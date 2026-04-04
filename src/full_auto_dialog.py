@@ -136,6 +136,9 @@ class FullAutoDialog(QDialog):
         self.cw_cb.setChecked(True)
         self.ccw_cb = QCheckBox("CCW")
         self.ccw_cb.setChecked(True)
+        # Auto-toggle handedness: CW → LH, CCW → RH
+        self.cw_cb.toggled.connect(self._on_direction_toggled)
+        self.ccw_cb.toggled.connect(self._on_direction_toggled)
         dir_layout.addWidget(self.cw_cb)
         dir_layout.addWidget(self.ccw_cb)
         dir_layout.addStretch()
@@ -147,6 +150,9 @@ class FullAutoDialog(QDialog):
         self.lh_cb.setChecked(True)
         self.rh_cb = QCheckBox("RH")
         self.rh_cb.setChecked(True)
+        # Auto-toggle direction: LH → CW, RH → CCW
+        self.lh_cb.toggled.connect(self._on_handedness_toggled)
+        self.rh_cb.toggled.connect(self._on_handedness_toggled)
         hand_layout.addWidget(self.lh_cb)
         hand_layout.addWidget(self.rh_cb)
         hand_layout.addStretch()
@@ -520,6 +526,24 @@ class FullAutoDialog(QDialog):
         else:
             return -(m + n - 1), m + n
 
+    def _on_handedness_toggled(self):
+        """Auto-toggle direction to match handedness: LH → CW, RH → CCW."""
+        if getattr(self, '_syncing_toggles', False):
+            return
+        self._syncing_toggles = True
+        self.cw_cb.setChecked(self.lh_cb.isChecked())
+        self.ccw_cb.setChecked(self.rh_cb.isChecked())
+        self._syncing_toggles = False
+
+    def _on_direction_toggled(self):
+        """Auto-toggle handedness to match direction: CW → LH, CCW → RH."""
+        if getattr(self, '_syncing_toggles', False):
+            return
+        self._syncing_toggles = True
+        self.lh_cb.setChecked(self.cw_cb.isChecked())
+        self.rh_cb.setChecked(self.ccw_cb.isChecked())
+        self._syncing_toggles = False
+
     def _on_auto_k_toggled(self, state):
         """Enable / disable the manual K spin boxes when auto-K is toggled."""
         auto = self.auto_k_range_cb.isChecked()
@@ -547,8 +571,8 @@ class FullAutoDialog(QDialog):
         m_max = self.m_max_spin.value()
         n_min = self.n_min_spin.value()
         n_max = self.n_max_spin.value()
-        dir_count = int(self.cw_cb.isChecked()) + int(self.ccw_cb.isChecked())
-        hand_count = int(self.lh_cb.isChecked()) + int(self.rh_cb.isChecked())
+        # Paired: LH→CW, RH→CCW (each handedness = 1 combo, not dir x hand)
+        pair_count = int(self.lh_cb.isChecked()) + int(self.rh_cb.isChecked())
         range_error = self._get_full_auto_range_error()
 
         if range_error:
@@ -561,7 +585,7 @@ class FullAutoDialog(QDialog):
             for m in range(m_min, m_max + 1):
                 for n in range(n_min, n_max + 1):
                     k_lo, k_hi = self._compute_auto_k_range(m, n)
-                    total += (k_hi - k_lo + 1) * dir_count * hand_count
+                    total += (k_hi - k_lo + 1) * pair_count
             self.combo_count_label.setText(
                 f"Auto-K: {total} combinations (K range varies per M,N pair)"
             )
@@ -569,9 +593,9 @@ class FullAutoDialog(QDialog):
             m_count = max(0, m_max - m_min + 1)
             n_count = max(0, n_max - n_min + 1)
             k_count = max(0, self.k_max_spin.value() - self.k_min_spin.value() + 1)
-            total = m_count * n_count * k_count * dir_count * hand_count
+            total = m_count * n_count * k_count * pair_count
             self.combo_count_label.setText(
-                f"Combinations: {m_count}M x {n_count}N x {k_count}K x {dir_count}dir x {hand_count}hand = {total} total"
+                f"Combinations: {m_count}M x {n_count}N x {k_count}K x {pair_count} pairs = {total} total"
             )
 
     def _get_main_window(self):
@@ -721,20 +745,14 @@ class FullAutoDialog(QDialog):
         auto_k = self.auto_k_range_cb.isChecked()
         k_min_manual, k_max_manual = self.k_min_spin.value(), self.k_max_spin.value()
 
-        directions = []
-        if self.cw_cb.isChecked():
-            directions.append("cw")
-        if self.ccw_cb.isChecked():
-            directions.append("ccw")
-
         handedness = []
         if self.lh_cb.isChecked():
             handedness.append("lh")
         if self.rh_cb.isChecked():
             handedness.append("rh")
 
-        if not directions or not handedness:
-            self._log("ERROR: Select at least one direction and one handedness.")
+        if not handedness:
+            self._log("ERROR: Select at least one handedness (LH or RH).")
             self._finish()
             return
 
@@ -769,15 +787,17 @@ class FullAutoDialog(QDialog):
                 else:
                     k_lo, k_hi = k_min_manual, k_max_manual
                 for k in range(k_lo, k_hi + 1):
-                    for direction in directions:
-                        for hand in handedness:
-                            combinations.append((m, n, k, direction, hand))
+                    # Enforce paired directions: LH→CW, RH→CCW
+                    if "lh" in handedness:
+                        combinations.append((m, n, k, "cw", "lh"))
+                    if "rh" in handedness:
+                        combinations.append((m, n, k, "ccw", "rh"))
 
         total = len(combinations)
         self._log(f"Starting Full Auto: {total} combinations")
         k_desc = "Auto" if auto_k else f"{k_min_manual} to {k_max_manual}"
         self._log(f"  M: {m_min}-{m_max}, N: {n_min}-{n_max}, K: {k_desc}")
-        self._log(f"  Directions: {directions}, Handedness: {handedness}")
+        self._log(f"  Handedness: {handedness} (LH→CW, RH→CCW)")
         self._log(f"  Angle mode: {angle_mode}")
         self._log(f"  Pair ext max: {pair_ext_max}px, step: {pair_ext_step}px")
         self._log(f"  GPU: {'Yes' if use_gpu else 'No'}")

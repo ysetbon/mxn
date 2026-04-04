@@ -834,6 +834,12 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
 
     def _on_variant_changed(self):
         """Handle LH/RH variant change - update continuation button state."""
+        # Enforce direction: LH → CW, RH → CCW
+        if hasattr(self, 'emoji_cw_radio'):
+            if self.lh_radio.isChecked():
+                self.emoji_cw_radio.setChecked(True)
+            else:
+                self.emoji_ccw_radio.setChecked(True)
         self._update_continuation_button_state()
         self._refresh_pair_extension_controls(preserve_values=False)
 
