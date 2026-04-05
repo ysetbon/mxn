@@ -127,6 +127,7 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
         self.current_image = None  # QImage in memory
         self._continuation_json_data = None  # Original continuation data (before any extension)
         self._suppress_auto_save = False  # Block auto-save during programmatic resets
+        self._syncing_variant_direction = False
 
         # Emoji renderer (handles all endpoint emoji drawing logic)
         self._emoji_renderer = EmojiRenderer()
@@ -382,7 +383,7 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
         self.emoji_k_spinner = QSpinBox()
         self.emoji_k_spinner.setRange(-9999, 9999)
         self.emoji_k_spinner.setValue(0)
-        self.emoji_k_spinner.valueChanged.connect(self._on_emoji_settings_changed)
+        self.emoji_k_spinner.valueChanged.connect(self._on_emoji_rotation_changed)
 
         self.emoji_dir_group = QButtonGroup(self)
         self.emoji_cw_radio = QRadioButton("CW")
@@ -390,8 +391,8 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
         self.emoji_dir_group.addButton(self.emoji_cw_radio, 0)
         self.emoji_dir_group.addButton(self.emoji_ccw_radio, 1)
         self.emoji_cw_radio.setChecked(True)
-        self.emoji_cw_radio.toggled.connect(self._on_emoji_settings_changed)
-        self.emoji_ccw_radio.toggled.connect(self._on_emoji_settings_changed)
+        self.emoji_cw_radio.toggled.connect(self._on_emoji_direction_changed)
+        self.emoji_ccw_radio.toggled.connect(self._on_emoji_direction_changed)
 
         self.refresh_emojis_btn = QPushButton("Refresh emoji painting")
         self.refresh_emojis_btn.setToolTip("Clear emoji render cache to remove colored halos/strokes")
@@ -815,12 +816,34 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
         self._rerender_preview_if_possible()
 
     def _on_emoji_settings_changed(self):
-        """Re-render preview when emoji options change (no geometry changes)."""
+        """Re-render preview when emoji display options change."""
         # Emoji toggles should update preview immediately
         self._rerender_preview_if_possible()
         # Update continuation button state (depends on emoji checkbox)
         self._update_continuation_button_state()
-        # Keep pair controls synchronized with k/direction.
+
+    def _on_emoji_rotation_changed(self, _value):
+        """Re-render preview and rebuild k-dependent pair controls."""
+        self._on_emoji_settings_changed()
+        self._refresh_pair_extension_controls(preserve_values=True)
+
+    def _on_emoji_direction_changed(self, checked):
+        """Keep direction and handedness in sync for the checked radio only."""
+        if not checked:
+            return
+        if self._syncing_variant_direction:
+            return
+
+        self._syncing_variant_direction = True
+        try:
+            if self.emoji_cw_radio.isChecked():
+                self.lh_radio.setChecked(True)
+            else:
+                self.rh_radio.setChecked(True)
+        finally:
+            self._syncing_variant_direction = False
+
+        self._on_emoji_settings_changed()
         self._refresh_pair_extension_controls(preserve_values=True)
 
     def _on_refresh_emojis_clicked(self):
@@ -832,14 +855,23 @@ class MxNGeneratorDialog(AlignmentMixin, RenderMixin, ColorMixin, ThemeMixin, QD
                 self._emoji_renderer.clear_cache()
         self._rerender_preview_if_possible()
 
-    def _on_variant_changed(self):
-        """Handle LH/RH variant change - update continuation button state."""
-        # Enforce direction: LH → CW, RH → CCW
-        if hasattr(self, 'emoji_cw_radio'):
-            if self.lh_radio.isChecked():
-                self.emoji_cw_radio.setChecked(True)
-            else:
-                self.emoji_ccw_radio.setChecked(True)
+    def _on_variant_changed(self, checked):
+        """Keep handedness and direction in sync for the checked radio only."""
+        if not checked:
+            return
+        if self._syncing_variant_direction:
+            return
+
+        self._syncing_variant_direction = True
+        try:
+            if hasattr(self, 'emoji_cw_radio'):
+                if self.lh_radio.isChecked():
+                    self.emoji_cw_radio.setChecked(True)
+                else:
+                    self.emoji_ccw_radio.setChecked(True)
+        finally:
+            self._syncing_variant_direction = False
+
         self._update_continuation_button_state()
         self._refresh_pair_extension_controls(preserve_values=False)
 
