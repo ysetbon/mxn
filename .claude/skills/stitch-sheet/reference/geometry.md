@@ -134,6 +134,27 @@ apply the derived angle and extensions to the other three groups instead of
 re-searching. Validate on a size already computed the slow way before trusting a
 whole sweep to it.
 
+### What does *not* transfer: k → −k with a hand swap
+
+Tempting, and wrong. Mirroring reverses the rim traversal, so `mirror(LH, k)`
+looks like it should be `(RH, −k)` and a k = +1 sweep would come free with a
+k = −1 one. Tested on the raw continuation directions *before* alignment (which
+removes search noise from the question) at 2×2, 3×3, 2×3, 3×2 and 1×3: only 2–4
+of the 8–12 continuations coincide, and **no reflection maps one set onto the
+other** — not θ → 180 − θ, not θ → −θ.
+
+k re-pairs which free end joins which, and reflection does not undo that
+pairing, so +k and −k are different stitches rather than two views of one.
+Generate each k.
+
+What makes it look plausible is a coincidence at 2×2, where
+`V_LH(k=+1) + V_LH(k=−1) = 179.99`. It breaks at every other size (3×3 → 182.24,
+2×3 → 177.78, 1×3 → 186.11).
+
+Note also that k = +1's hand mirror is `H_RH = −(180 + H_LH)` while k = −1's is
+`H_RH = 180 − H_LH`, and the transpose law that is exact 63/63 at k = −1 is only
+approximate at k = +1 (off ~1–2° at 2×3 and 3×2). Re-derive these per k.
+
 ## Where k = −1 stops solving
 
 Same sweep: a group whose pair count is ≥ 7 never aligned — the aligner returned
