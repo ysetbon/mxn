@@ -24,6 +24,8 @@ import render_strands as R  # noqa: E402
 PITCH = 112.0          # grid pitch between neighbouring ribbons, px
 WIDTH = 46             # strand width, px
 MIN_GAP = WIDTH + 10   # aligner's gap floor, px
+# marker for a value that came from a fallback rather than a solved alignment
+FB = '<span class="fb" title="aligner fell back: no valid solution found">†</span>'
 
 
 # --------------------------------------------------------------- diagrams --
@@ -229,7 +231,15 @@ def main():
     sections = []
 
     # ---- anatomy ----------------------------------------------------------
-    a_rec = primary(items[len(items) // 2])
+    # The anatomy figure is the explanatory centrepiece, so pick a stitch that
+    # actually shows the structure: as square as possible, mid-sized, and one
+    # whose alignment solved. The middle of the size list is often a 1-row
+    # degenerate case, which teaches nothing.
+    def anat_rank(it):
+        rec = primary(it)
+        fell = bool(rec['horizontal']['fallback'] or rec['vertical']['fallback'])
+        return (fell, abs(it['m'] - it['n']), abs(min(it['m'], it['n']) - 3))
+    a_rec = primary(sorted(items, key=anat_rank)[0])
     a_m, a_n, a_hand = a_rec['m'], a_rec['n'], a_rec['hand']
     st_svg, fin_svg = render_pair(a.results, a_rec['tag'], 'an')
     sections.append("""
@@ -366,8 +376,14 @@ def main():
         for hand in hands:
             s = it['hands'].get(hand)
             for group in ('horizontal', 'vertical'):
-                cells.append('<td>%s</td>' % (fmt(s[group]['angle'], 2, '°') if s else '—'))
-        cells.append('<td>%s</td>' % fmt(first['horizontal']['gap'], 3))
+                if not s:
+                    cells.append('<td>—</td>')
+                    continue
+                # a fallback is not a solution; never show its number unmarked
+                cells.append('<td>%s%s</td>' % (fmt(s[group]['angle'], 2, '°'), FB
+                                                if s[group]['fallback'] else ''))
+        cells.append('<td>%s%s</td>' % (fmt(first['horizontal']['gap'], 3),
+                                        FB if first['horizontal']['fallback'] else ''))
         cells.append('<td>%s</td>' % fmt(first['horizontal']['spread'], 2))
         cells.append('<td class="ext">%s</td>' %
                      (' '.join('%g' % e for e in first['horizontal']['extensions']) or '—'))
@@ -379,8 +395,12 @@ def main():
     <p class="note"><b>spread</b> is the aligner's first-last distance across the horizontal
     group — the perpendicular distance from its first strand to its last, equal to
     <code>(strands − 1) × gap</code>. Angles are the aligner's own shared angle per group;
-    gap, spread and extensions are reported for %s.</p>
-  </section>""" % (''.join('<th>%s</th>' % h for h in head), '\n'.join(trs), hands[0].upper()))
+    gap, spread and extensions are reported for %s.
+    <b class="fb">†</b> marks a group where the aligner <b>fell back</b>: it found no
+    arrangement with every gap inside <code>[%d, %d] px</code>, so that angle and gap are the
+    best failed attempt, not a solution. Those rows are not usable geometry.</p>
+  </section>""" % (''.join('<th>%s</th>' % h for h in head), '\n'.join(trs), hands[0].upper(),
+        MIN_GAP, int(WIDTH * 1.5)))
 
     # ---- gallery ----------------------------------------------------------
     cards = []

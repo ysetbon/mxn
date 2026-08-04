@@ -99,18 +99,27 @@ otherwise let the search run.
 
 ## Two exact symmetries — forecast instead of searching
 
-Measured across a full 8 × 8 sweep at k = −1, both hands, to a 0.02° tolerance:
+Measured across the full 8 × 8 sweep at k = −1, both hands (63 sizes, 126 runs),
+to a 0.02° tolerance:
 
 ```
-transpose    V_LH(m, n) = H_LH(n, m) − 90
-hand mirror  H_RH(m, n) = 180 − H_LH(m, n)
-             V_RH(m, n) = −V_LH(m, n)
+transpose    V_LH(m, n) = H_LH(n, m) − 90      63/63 exact
+             V_RH(m, n) = −V_LH(m, n)          63/63 exact
+hand mirror  H_RH(m, n) = 180 − H_LH(m, n)     62/63 — breaks at 2 × 2
 ```
 
 The transpose one is the useful one: a stitch's vertical group is its transpose's
 horizontal group turned 90°, so **every angle in a grid follows from the
 horizontal LH search alone** — one independent quantity per (m, n) rather than
 four. On an 8 × 8 grid that is a 4× cut in search cost.
+
+**The hand mirror is not safe to derive from.** At 2 × 2 the two hands settle on
+different optima — LH lands on angle 162.82°, spread 172.03, gap variance 0.465,
+extensions [0, 70]; RH on 22.07° (not the mirrored 17.18°), spread 170.41,
+variance 0.516, extensions [10, 30]. The two spreads are 1.6 px apart, inside the
+aligner's own 2 px tie band, so both are legitimate and the tie broke differently
+per hand. The geometry is symmetric; the *search* is not guaranteed to be. Derive
+RH only with a verification pass, or search it.
 
 Extensions transpose too (`V_ext(m, n) == H_ext(n, m)`) wherever both groups
 actually solved; where one of them fell back the extension vectors diverge, so
