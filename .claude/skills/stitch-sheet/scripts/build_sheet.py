@@ -143,7 +143,11 @@ def main():
     ap.add_argument('--title', required=True)
     ap.add_argument('--intro', default='')
     ap.add_argument('--eyebrow', default='mxn generator · reference')
-    ap.add_argument('--label', default='auto', choices=['auto', 'twist', 'box'])
+    ap.add_argument('--label', default='auto',
+                    help="what to call the stitch: auto, or any word (twist, box, swirl)")
+    ap.add_argument('--compare', default='',
+                    help='results dir for another k, shown as a per-row counterpart column')
+    ap.add_argument('--compare-label', default='')
     a = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(a.results, '*.json')))
@@ -158,6 +162,17 @@ def main():
     sizes = sorted({(s['m'], s['n']) for s in sums})
     by = {(s['m'], s['n'], s['hand']): s for s in sums}
     word = a.label if a.label != 'auto' else ('box' if ks == [0] else 'twist')
+
+    # optional counterpart set from another k, keyed the same way
+    cmp_by, cmp_k = {}, None
+    if a.compare:
+        for f in sorted(glob.glob(os.path.join(a.compare, '*.json'))):
+            if f.endswith(('_start.json', '_final.json')):
+                continue
+            c = json.load(open(f))
+            cmp_by[(c['m'], c['n'], c['hand'])] = c
+            cmp_k = c['k']
+    cmp_head = a.compare_label or (('k = %+d' % cmp_k) if cmp_k is not None else '')
 
     # ---- items (one per size) --------------------------------------------
     items = []
@@ -223,7 +238,7 @@ def main():
            'straight bars: a <b>box</b>, with nothing left for the aligner to do.'
            if word == 'box' else
            'k re-pairs the ends, so the continuations fan out and the aligner has to bring each group '
-           'to one shared angle with even gaps: a <b>twist</b>.'))
+           'to one shared angle with even gaps: a <b>%s</b>.' % word))
     header = ('<header><div class="eyebrow">%s</div><h1>%s</h1><p class="lede">%s</p>'
               '<div class="params">%s</div></header>'
               % (esc(a.eyebrow), esc(a.title), intro, ''.join(chips)))
@@ -337,6 +352,28 @@ def main():
     sections.append('<section class="sec"><h2>Alignment <span>what happens in the last pass</span>'
                     '</h2>%s</section>' % detail)
 
+    if cmp_by:
+        sections.append("""
+  <section class="sec">
+    <h2>Where these numbers come from <span>and what the %s column is not</span></h2>
+    <div class="callout">
+      <p>Every angle on this page was <b>searched independently</b> for its own size, hand and
+      group, by running the repo's aligner on the generated stitch. <b>None of them is derived
+      from %s.</b> That was tested and ruled out: mirroring a stitch swaps the hand but
+      <i>preserves</i> k, and k decides which free end pairs with which, so a stitch at +k and
+      one at −k are different objects — at 1&nbsp;×&nbsp;2 they share none of their six
+      continuation segments under any reflection.</p>
+      <p>What <i>did</i> come from %s is the <b>search resolution</b>. The 1&nbsp;×&nbsp;n family
+      at k&nbsp;=&nbsp;+1 has a closed form, so its optimum is known exactly and any search can be
+      graded against it. Checking a k&nbsp;=&nbsp;+1 run that way exposed an angle grid too coarse
+      to represent the true optimum — it returned <code>−145.00°</code> where the exact answer is
+      <code>−141.28°</code>. The same setting had been used for every size here, so the sizes
+      marked at the finer angle grid above were re-searched, and every group improved.</p>
+      <p>The <b>%s</b> column is therefore a <i>comparison</i>, not a derivation: the same size and
+      hand at the other k, searched the same way, so the two can be read against each other.</p>
+    </div>
+  </section>""" % (esc(cmp_head), esc(cmp_head), esc(cmp_head), esc(cmp_head)))
+
     # ---- chart ------------------------------------------------------------
     tip_data = []
     for i, it in enumerate(items):
@@ -374,6 +411,8 @@ def main():
     head += ['gap (px)', 'spread (px)', 'extensions (px)']
     if mixed_angle:
         head.append('angle grid')
+    if cmp_by:
+        head.append('H · LH @ ' + cmp_head)
     trs = []
     for i, it in enumerate(items):
         first = primary(it)
@@ -397,6 +436,10 @@ def main():
             st = first['search']['angle_step']
             fine = st == angle_steps[0]
             cells.append('<td%s>%g°</td>' % (' class="fine"' if fine else '', st))
+        if cmp_by:
+            c = cmp_by.get((it['m'], it['n'], 'lh'))
+            cells.append('<td class="cmp">%s</td>'
+                         % (fmt(c['horizontal']['angle'], 2, '°') if c else '—'))
         trs.append('<tr data-i="%d">%s</tr>' % (i, ''.join(cells)))
     sections.append("""
   <section class="sec">
