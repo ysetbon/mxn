@@ -117,9 +117,11 @@ four. On an 8 × 8 grid that is a 4× cut in search cost.
 different optima — LH lands on angle 162.82°, spread 172.03, gap variance 0.465,
 extensions [0, 70]; RH on 22.07° (not the mirrored 17.18°), spread 170.41,
 variance 0.516, extensions [10, 30]. The two spreads are 1.6 px apart, inside the
-aligner's own 2 px tie band, so both are legitimate and the tie broke differently
-per hand. The geometry is symmetric; the *search* is not guaranteed to be. Derive
-RH only with a verification pass, or search it.
+aligner's own 2 px tie band, so both are legitimate. The geometry is symmetric;
+the *search* is not guaranteed to be. Derive RH only with a verification pass, or
+search it. (Those figures are from the 0.5° pass; refining the grid moves the
+numbers but does **not** close the gap — see "The angle step is not a free knob"
+below for the actual cause, which is the hand-dependent angle window.)
 
 Extensions transpose too (`V_ext(m, n) == H_ext(n, m)`) wherever both groups
 actually solved; where one of them fell back the extension vectors diverge, so
@@ -162,8 +164,10 @@ Same sweep: a group whose pair count is ≥ 7 never aligned — the aligner retu
 not a search-budget artifact: raising `max_pair_extension` from 200 to 600 made
 1 × 8 *worse* (gap 69.8 → 79.3), and a 40× finer grid did not clear it either.
 Pair counts ≤ 5 always solved; 6 solved except where both dimensions were 6+.
-When a group solves at k = −1 it solves cleanly (gaps 57–61 px); there is no
-ambiguous middle.
+When a group solves at k = −1 it solves cleanly; there is no ambiguous middle.
+(The 57–61 px gaps first measured for solved groups were an artifact of the 0.5°
+angle grid — re-searched at 0.1° they tighten to roughly 56.1–56.9 px, against a
+56 px floor.)
 
 ## The angle step is not a free knob
 
