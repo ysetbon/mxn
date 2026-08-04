@@ -3,7 +3,7 @@ import json
 
 
 def _rgb(c):
-    return f"rgb({c['r']},{c['g']},{c['b']})"
+    return '#%02x%02x%02x' % (c['r'], c['g'], c['b'])
 
 
 # deterministic palette: horizontal sets keep the generator's white/green then
@@ -77,7 +77,11 @@ def render(path, label=None, show_names=True, size=520, view=None, idp='',
         f'width="100%" style="max-width:{size}px;height:auto;display:block">'
     )
 
-    # masks: white band along the "second" strand of each MaskedStrand
+    # masks: white band along the "second" strand of each MaskedStrand.
+    # A mask's backdrop is already transparent black, so no covering rect is
+    # needed; ids are sequential because a full 8x8 sheet carries ~10k of them
+    # and the layer names are long.
+    mask_id = {}
     out.append('<defs>')
     for s in strands:
         if s['type'] != 'MaskedStrand':
@@ -87,41 +91,37 @@ def render(path, label=None, show_names=True, size=520, view=None, idp='',
             continue
         ax, ay, bx, by = _line(second)
         bw = second['width'] + 2 * second['stroke_width']
-        mid = s['layer_name']
+        mid = '%s%d' % (idp, len(mask_id))
+        mask_id[s['layer_name']] = mid
         out.append(
-            f'<mask id="{idp}m_{mid}" maskUnits="userSpaceOnUse" x="{x0:.1f}" y="{y0:.1f}" '
-            f'width="{w:.1f}" height="{h:.1f}">'
-            f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}" fill="black"/>'
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="white" stroke-width="{bw}" stroke-linecap="butt"/></mask>'
+            f'<mask id="{mid}" maskUnits="userSpaceOnUse" x="{x0:.0f}" y="{y0:.0f}" '
+            f'width="{w:.0f}" height="{h:.0f}">'
+            f'<path d="M{ax:.1f} {ay:.1f}L{bx:.1f} {by:.1f}" '
+            f'stroke="#fff" stroke-width="{bw}"/></mask>'
         )
     out.append('</defs>')
 
     def draw_body(s, mask=None):
+        # butt is the default stroke-linecap and a two-point path is shorter than
+        # a <line>; both matter at ~16k strands per sheet.
         ax, ay, bx, by = _line(s)
         col = _rgb(s['color'])
         sw = s['stroke_width']
         wid = s['width']
-        attr = ' mask="url(#%sm_%s)"' % (idp, mask) if mask else ''
-        g = '<g%s>' % attr
-        parts = [g]
+        attr = ' mask="url(#%s)"' % mask if mask else ''
+        parts = ['<g%s>' % attr]
         # attachment circles
         for i, has in enumerate(s.get('has_circles', [False, False])):
             if not has:
                 continue
             cx, cy = (ax, ay) if i == 0 else (bx, by)
             parts.append(
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid / 2 + sw:.2f}" fill="black"/>'
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid / 2:.2f}" fill="{col}"/>'
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{wid / 2 + sw:.1f}"/>'
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{wid / 2:.1f}" fill="{col}"/>'
             )
-        parts.append(
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="black" stroke-width="{wid + 2 * sw}" stroke-linecap="butt"/>'
-        )
-        parts.append(
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="{col}" stroke-width="{wid}" stroke-linecap="butt"/>'
-        )
+        d = f'M{ax:.1f} {ay:.1f}L{bx:.1f} {by:.1f}'
+        parts.append(f'<path d="{d}" stroke="#000" stroke-width="{wid + 2 * sw}"/>')
+        parts.append(f'<path d="{d}" stroke="{col}" stroke-width="{wid}"/>')
         parts.append('</g>')
         return ''.join(parts)
 
@@ -145,8 +145,8 @@ def render(path, label=None, show_names=True, size=520, view=None, idp='',
                 out.append(draw_body(s))
                 continue
             first = by_name.get(s['first_selected_strand'])
-            if first is not None:
-                out.append(draw_body(first, mask=name))
+            if first is not None and name in mask_id:
+                out.append(draw_body(first, mask=mask_id[name]))
 
     emit(want_cont=False, masked=False)   # 1. _1 / _2 / _3
     emit(want_cont=False, masked=True)    # 2. their masks

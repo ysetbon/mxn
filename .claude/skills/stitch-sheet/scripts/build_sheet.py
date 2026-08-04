@@ -75,10 +75,23 @@ def chart_svg(items, xs, x_title, series):
     for v in range(int(y_lo), int(y_hi) + 1, step):
         o.append('<line class="grid" x1="%d" y1="%.1f" x2="%d" y2="%.1f"/>' % (ML, sy(v), ML + PW, sy(v)))
         o.append('<text class="tick ty" x="%d" y="%.1f">%d°</text>' % (ML - 10, sy(v) + 4, v))
-    for x, it in zip(xs, items):
+    # With many sizes the x labels collide, so thin them. On a full m × n grid the
+    # natural places to label are the start of each m block (n = 1); otherwise fall
+    # back to evenly spaced every-Nth.
+    every = 1
+    while len(xs) / float(every) * 26.0 > PW:
+        every += 1
+    keep = {i for i in range(len(xs)) if i % every == 0}
+    if every > 1 and len({it.get('m') for it in items}) > 1:
+        blocks = {i for i, it in enumerate(items) if it.get('n') == 1} | {0}
+        if 2 <= len(blocks) <= PW / 26.0:
+            keep = blocks
+    for i, (x, it) in enumerate(zip(xs, items)):
         o.append('<line class="grid vgrid" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>'
                  % (sx(x), MT, sx(x), MT + PH))
-        o.append('<text class="tick tx" x="%.1f" y="%d">%s</text>' % (sx(x), MT + PH + 20, it['xlabel']))
+        if i in keep:
+            o.append('<text class="tick tx" x="%.1f" y="%d">%s</text>'
+                     % (sx(x), MT + PH + 20, it['xlabel']))
     o.append('<text class="axis-title" x="%.1f" y="%d">%s</text>' % (ML + PW / 2, CH - 6, x_title))
     o.append('<text class="axis-title" transform="translate(15,%.1f) rotate(-90)">strand angle</text>'
              % (MT + PH / 2))
@@ -153,6 +166,14 @@ def main():
             if s:
                 rec['hands'][hand] = s
         items.append(rec)
+    def primary(it):
+        """The record a size is summarised from: preferred hand if it ran, else
+        whichever hand did — a size is not always present in both hands."""
+        for hand in hands:
+            if hand in it['hands']:
+                return it['hands'][hand]
+        return None
+
     same_m = len({m for m, _ in sizes}) == 1
     same_n = len({n for _, n in sizes}) == 1
     if same_m and not same_n:
@@ -208,10 +229,9 @@ def main():
     sections = []
 
     # ---- anatomy ----------------------------------------------------------
-    a_m, a_n = sizes[len(sizes) // 2]
-    a_hand = hands[0]
-    a_tag = '%s_%dx%d_k%d' % (a_hand, a_m, a_n, ks[0])
-    st_svg, fin_svg = render_pair(a.results, a_tag, 'an')
+    a_rec = primary(items[len(items) // 2])
+    a_m, a_n, a_hand = a_rec['m'], a_rec['n'], a_rec['hand']
+    st_svg, fin_svg = render_pair(a.results, a_rec['tag'], 'an')
     sections.append("""
   <section class="sec">
     <h2>Anatomy <span>%d × %d, %s</span></h2>
@@ -271,22 +291,39 @@ def main():
         worst = max(sums, key=lambda s: s['timing']['h_align_s'] + s['timing']['v_align_s'])
         ok = sum(1 for s in sums if (s['horizontal']['success'] or s['horizontal']['preserved'])
                  and (s['vertical']['success'] or s['vertical']['preserved']))
+        # --ext-step auto picks a step per size, so a sweep is not one single grid:
+        # report the whole range actually used, and name the runs that fell back.
+        steps = sorted({s['search'][key] for s in sums for key in ('h_step', 'v_step')})
+        step_txt = ('<b>%d px</b>' % steps[0] if len(steps) == 1 else
+                    '<b>%d … %d px</b> (chosen per size to fit the combo budget)'
+                    % (steps[0], steps[-1]))
+        fell = sorted(s['tag'] for s in sums
+                      if s['horizontal']['fallback'] or s['vertical']['fallback'])
+        notes = ''
+        if steps[-1] > 20:
+            notes += ('<br><span class="c">// the grid is coarsened above 20 px — calibrated at '
+                      '1×3, step 20 reproduces step 10 exactly, step 25 drifts ~1.2° and step 40 '
+                      '~2°, with looser gaps. Sizes needing 5+ extension pairs use those coarser '
+                      'grids and their angles carry that much uncertainty.</span>')
+        if fell:
+            notes += ('<br><br><span class="c">// %d run%s fell back</span><br>%s'
+                      % (len(fell), '' if len(fell) == 1 else 's', esc(', '.join(fell))))
         detail = ("""<div class="formula">
       <span class="c">// what the aligner searches</span><br>
       combos per group = <b>(ext_max / step + 1) ^ pairs</b> ,  pairs = half the group's strands<br>
       a gap must sit in <b>[width + 10, width × 1.5] = [%d, %d] px</b><br>
       it ranks by <b>first-last distance = (strands − 1) × gap</b>, then by gap variance<br><br>
       <span class="c">// this run</span><br>
-      grid 0 … <b>%d px</b>, step <b>%d / %d px</b> (h / v) , angle step <b>%s°</b>, mode <b>%s</b><br>
+      grid 0 … <b>%d px</b>, step %s , angle step <b>%s°</b>, mode <b>%s</b><br>
       largest search <b>%s / %s</b> combos ,  slowest stitch <b>%.1f s</b> (%s)<br>
-      <b>%d of %d</b> runs succeeded without falling back
+      <b>%d of %d</b> runs succeeded without falling back%s
     </div>""" % (MIN_GAP, int(WIDTH * 1.5), s0['search']['ext_max'],
-                 s0['search']['h_step'], s0['search']['v_step'],
+                 step_txt,
                  s0['search']['angle_step'], s0['search']['angle_mode'],
                  max(s['search']['h_combos'] for s in sums),
                  max(s['search']['v_combos'] for s in sums),
                  worst['timing']['h_align_s'] + worst['timing']['v_align_s'], worst['tag'],
-                 ok, len(sums)))
+                 ok, len(sums), notes))
     sections.append('<section class="sec"><h2>Alignment <span>what happens in the last pass</span>'
                     '</h2>%s</section>' % detail)
 
@@ -297,9 +334,11 @@ def main():
         for s in series:
             v = s['vals'][i]
             rowsd.append([s['label'], '—' if v is None else '%.2f°' % v])
-        h = it['hands'].get(hands[0], {}).get('horizontal', {})
+        h = (primary(it) or {}).get('horizontal', {})
         if h.get('gap'):
-            rowsd.append(['gap / spread', '%.3f / %.1f px' % (h['gap'], h['spread'])])
+            # a fallback can report a gap with no first-last distance, so format
+            # each half independently rather than assuming both are numbers
+            rowsd.append(['gap / spread', '%s / %s px' % (fmt(h['gap'], 3), fmt(h['spread'], 1))])
         tip_data.append(dict(label='%d × %d' % (it['m'], it['n']), rows=rowsd))
     if show_chart:
         legend = ''.join('<span><i class="%s" style="border-color:%s"></i>%s</span>'
@@ -321,7 +360,7 @@ def main():
     head += ['gap (px)', 'spread (px)', 'extensions (px)']
     trs = []
     for i, it in enumerate(items):
-        first = it['hands'][hands[0]]
+        first = primary(it)
         cells = ['<td class="n">%d × %d</td>' % (it['m'], it['n']),
                  '<td>%d</td>' % first['totals']['strands']]
         for hand in hands:
@@ -361,7 +400,7 @@ def main():
                     '%s · %s' % (hand.upper(), s['direction']),
                     fmt(s['horizontal']['angle'], 2, '°'), fmt(s['vertical']['angle'], 2, '°'),
                     st, word, fin))
-        t = it['hands'][hands[0]]['totals']
+        t = primary(it)['totals']
         cards.append(
             '<div class="pat"><div class="pat-head"><span class="pat-n">%d × %d</span>'
             '<span class="pat-meta">%d vertical · %d horizontal · %d strands '
