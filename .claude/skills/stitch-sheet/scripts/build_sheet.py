@@ -370,7 +370,16 @@ def main():
       <code>−141.28°</code>. The same setting had been used for every size here, so the sizes
       marked at the finer angle grid above were re-searched, and every group improved.</p>
       <p>The <b>%s</b> column is therefore a <i>comparison</i>, not a derivation: the same size and
-      hand at the other k, searched the same way, so the two can be read against each other.</p>
+      hand at the other k, so the two can be read against each other.</p>
+      <p><b>Where those counterpart numbers come from, and a caveat that applies here too.</b>
+      For m&nbsp;=&nbsp;1 the column carries the <i>exact</i> closed-form optimum. For m&nbsp;≥&nbsp;2
+      no closed form is known, so it carries a searched value at the fine angle grid. That
+      distinction matters, because on the four sizes where an exact answer exists the search never
+      reached it — it was beaten on every one by the aligner's own ranking, and at 1&nbsp;×&nbsp;3
+      it settled on extensions <code>[140, 100, 120]</code> where the optimum is
+      <code>[67, 0, 34]</code>, a spread of 282.01 against 280.02. Since the numbers on this page
+      are searched the same way, they should be read as <b>good solutions, not proven optima</b>.
+      No closed form is known at k&nbsp;=&nbsp;−1 to grade them against.</p>
     </div>
   </section>""" % (esc(cmp_head), esc(cmp_head), esc(cmp_head), esc(cmp_head)))
 
