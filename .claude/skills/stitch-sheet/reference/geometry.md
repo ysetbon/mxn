@@ -97,6 +97,44 @@ aligner then run with `max_pair_extension=0` and a tight
 for any n. Only do this where the closed form is known to hold (m = 1, k = +1);
 otherwise let the search run.
 
+## Two exact symmetries — forecast instead of searching
+
+Measured across a full 8 × 8 sweep at k = −1, both hands, to a 0.02° tolerance:
+
+```
+transpose    V_LH(m, n) = H_LH(n, m) − 90
+hand mirror  H_RH(m, n) = 180 − H_LH(m, n)
+             V_RH(m, n) = −V_LH(m, n)
+```
+
+The transpose one is the useful one: a stitch's vertical group is its transpose's
+horizontal group turned 90°, so **every angle in a grid follows from the
+horizontal LH search alone** — one independent quantity per (m, n) rather than
+four. On an 8 × 8 grid that is a 4× cut in search cost.
+
+Extensions transpose too (`V_ext(m, n) == H_ext(n, m)`) wherever both groups
+actually solved; where one of them fell back the extension vectors diverge, so
+only trust the extension half on solved groups.
+
+Note the hand mirror here is `H_RH = 180 − H_LH`, **not** the `−(180 + H_LH)`
+that holds for m = 1, k = +1 — the relation is k-dependent, so verify it per
+sweep rather than carrying it across k.
+
+To exploit this, search `align_horizontal_strands_parallel` for LH only, then
+apply the derived angle and extensions to the other three groups instead of
+re-searching. Validate on a size already computed the slow way before trusting a
+whole sweep to it.
+
+## Where k = −1 stops solving
+
+Same sweep: a group whose pair count is ≥ 7 never aligned — the aligner returned
+`is_fallback` with gaps around 150 px, far outside the `[56, 69]` band. This is
+not a search-budget artifact: raising `max_pair_extension` from 200 to 600 made
+1 × 8 *worse* (gap 69.8 → 79.3), and a 40× finer grid did not clear it either.
+Pair counts ≤ 5 always solved; 6 solved except where both dimensions were 6+.
+When a group solves at k = −1 it solves cleanly (gaps 57–61 px); there is no
+ambiguous middle.
+
 ## Search cost
 
 `combos = (ext_max / step + 1) ** pairs`, throughput ≈ 900 combos/s (3 workers).
