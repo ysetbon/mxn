@@ -364,10 +364,16 @@ def main():
   </section>""" % (legend, chart_svg(items, xs, x_title, series)))
 
     # ---- table ------------------------------------------------------------
+    # A sweep can mix angle resolutions (a coarse pass plus a refinement of some
+    # sizes). Never present both as one number set: name the grid per row.
+    angle_steps = sorted({s['search']['angle_step'] for s in sums})
+    mixed_angle = len(angle_steps) > 1
     head = ['stitch', 'strands']
     for hand in hands:
         head += ['H · ' + hand.upper(), 'V · ' + hand.upper()]
     head += ['gap (px)', 'spread (px)', 'extensions (px)']
+    if mixed_angle:
+        head.append('angle grid')
     trs = []
     for i, it in enumerate(items):
         first = primary(it)
@@ -387,6 +393,10 @@ def main():
         cells.append('<td>%s</td>' % fmt(first['horizontal']['spread'], 2))
         cells.append('<td class="ext">%s</td>' %
                      (' '.join('%g' % e for e in first['horizontal']['extensions']) or '—'))
+        if mixed_angle:
+            st = first['search']['angle_step']
+            fine = st == angle_steps[0]
+            cells.append('<td%s>%g°</td>' % (' class="fine"' if fine else '', st))
         trs.append('<tr data-i="%d">%s</tr>' % (i, ''.join(cells)))
     sections.append("""
   <section class="sec">
@@ -398,9 +408,14 @@ def main():
     gap, spread and extensions are reported for %s.
     <b class="fb">†</b> marks a group where the aligner <b>fell back</b>: it found no
     arrangement with every gap inside <code>[%d, %d] px</code>, so that angle and gap are the
-    best failed attempt, not a solution. Those rows are not usable geometry.</p>
+    best failed attempt, not a solution. Those rows are not usable geometry.%s</p>
   </section>""" % (''.join('<th>%s</th>' % h for h in head), '\n'.join(trs), hands[0].upper(),
-        MIN_GAP, int(WIDTH * 1.5)))
+        MIN_GAP, int(WIDTH * 1.5),
+        ('' if not mixed_angle else
+         ' The <b>angle grid</b> column gives the angle resolution each row was searched at. '
+         'A coarser grid cannot represent an optimum that falls between its steps, so coarser '
+         'rows sit slightly wide of the true optimum &mdash; on the sizes re-searched here the '
+         'gap tightened by several px. Rows are not interchangeable across resolutions.')))
 
     # ---- gallery ----------------------------------------------------------
     cards = []

@@ -165,6 +165,46 @@ Pair counts ≤ 5 always solved; 6 solved except where both dimensions were 6+.
 When a group solves at k = −1 it solves cleanly (gaps 57–61 px); there is no
 ambiguous middle.
 
+## The angle step is not a free knob
+
+`--angle-step 0.5` looks harmless and is not. The aligner quantises angles at
+0.01°, and an optimum that falls between the steps of a coarser grid simply
+cannot be represented, so the search settles for a worse one.
+
+Caught by checking a k = +1 run against the closed-form values: 1 × 2 at k = +1
+should be `H_LH = -141.28°, gap 56.005, ext [39, 0]`; at `--angle-step 0.5` the
+search returned `-145.00°, gap 57.35`. Refining to 0.01° puts the vertical group
+back on the reference value exactly (117.15°) and the horizontal within 0.05 px
+of the optimal spread.
+
+The same error runs through a whole k = -1 sweep done at 0.5°. Re-searching the
+solved sizes at 0.1°, holding the extension grid fixed:
+
+| | groups | mean spread gain |
+|---|---|---|
+| square sizes (angle grid alone) | 16 | **+5.39 px** |
+| non-square (angle + finer vertical ext) | 40 | +3.18 px |
+
+Worst case measured was 4 × 4, gap `58.71 -> 56.78`, spread gain **13.52 px**.
+Every group tested improved; none were unchanged.
+
+Cost is roughly **16x** per 5x refinement in angle step, not the ~5x a naive
+linear model predicts — budget accordingly. Refining a fallback run is wasted
+work: it has no valid solution to converge to.
+
+Note `run_stitch.py` takes one `--ext-step` for both groups, so on a non-square
+size, re-running with the horizontal step also refines the vertical extension
+grid. Only square sizes isolate the angle effect cleanly.
+
+### The 2 x 2 hand disagreement is not resolution
+
+`H_LH + H_RH = 180` holds 13/14 on the refined sizes but stays broken at 2 x 2
+(183.99, versus 184.89 at 0.5°). Refining the angle step, refining the extension
+grid and raising the extension ceiling all fail to close it. The cause is the
+`first_strand` angle window: it spans ±20° around an initial angle that differs
+per hand, so the mirrored optimum can sit outside the window RH ever searches.
+Derive RH by mirroring LH (see H6 above); do not expect its own search to agree.
+
 ## Search cost
 
 `combos = (ext_max / step + 1) ** pairs`, throughput ≈ 900 combos/s (3 workers).
