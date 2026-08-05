@@ -144,6 +144,25 @@ Gaps are uniform at 56.010 px, gap variance ~10⁻²⁶. `scripts/solve_stitch.p
 does this end to end in about half a second per size, against the ~4 min the
 combo search needs at 4 pairs.
 
+That table is the *best* member of each family, not the only one. A recorded
+alternative at 1 × 4, steered by hand and applied with `--h-angle/--h-ext`:
+
+```
+H · LH 149.253°   ext 25.3  81.9  6.4  43.2   mean gap 58.108  var 0.226  spread 406.76
+V · LH  72.645°   ext 31.9                    gap 58.502
+```
+
+Valid — all seven gaps in band, and palindromic — but wider and slightly uneven
+against the solved 56.010, and outside the aligner's window, which at that
+outermost extension has moved to 108.57–148.57°. Its RH mirror is exact:
+`H 30.747°`, `V −72.645°`, same extensions, gaps identical to 10⁻⁹ px.
+
+Worth knowing from that comparison: **the angle sets the gap, the extensions
+only decide how evenly it is shared.** Holding 149.253° and moving two pairs
+about 1.5 px (81.9 → 82.9, 6.4 → 4.9) drops the variance from 0.226 to
+2.7 × 10⁻⁴ at the same 58.11 px mean. So a hand-chosen angle costs nothing in
+evenness — it is the gap size you are choosing.
+
 `H_RH = 180 − H_LH` and `V_RH = −V_LH` hold **exactly** here, and not as a
 coincidence: RH's geometry is LH's reflected about x = 1232 — measured 0.0 px
 deviation, index for index in the horizontal group and in reverse order in the
