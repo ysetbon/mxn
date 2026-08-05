@@ -248,6 +248,37 @@ pair cuts inside. `--min-corner N` searches both groups together for a margin of
 at least N, which it has to: the margin moves with all four free parameters and
 no per-group pass can see it.
 
+### Where the margin comes from, and where it runs out
+
+Hold the gaps uniform at the 56 px floor and the margin rises steadily with the
+shared angle, so each size has exactly one angle where it crosses zero — the
+least-turned configuration whose outside pair clears its corner. That crossing
+is what the picked-2 rows aim at:
+
+| n | crossing | margin there | Σ ext | best margin attainable at the floor |
+|---|---|---|---|---|
+| 4 | 146.674° | +0.699 | 125.70 | +7.237 (at 155.582°) |
+| 5 | 153.258° | +0.000 | 243.57 | +3.847 (at 157.660°) |
+| 6 | 158.006° | +0.000 | 424.04 | +1.233 (at 159.260°) |
+| 7 | — | — | — | **never clears at the floor** |
+
+The room runs out as n grows: the best margin available anywhere in the band
+falls +7.24 → +3.85 → +1.23, and by 1 × 7 no angle at the floor puts the
+outside pair outside the corner at all. Above that size the gap would have to
+come off the floor, which costs spread, or the corner has to be accepted inside.
+
+### 1 × 6, picked 2
+
+```
+H · LH 158.0065°  ext 3.5418 127.7393 40.4697 105.9219 62.2871 84.1045
+V · LH  78.3165°  ext 35.2704
+gaps 56.010 uniform, spread 616.11, vertical gap 61.850, margin +0.0008 outside
+```
+
+RH mirrors exactly: `H 21.9935°`, `V −78.3165°`. The vertical is your 1 × 5
+vertical carried across on its own extension (35.2704 px at gap 61.850), a rule
+that reproduces the 1 × 5 angle to four decimals.
+
 ### 1 × 5, picked 2
 
 The configuration that gets closest to the corner, arrived at by hand:
