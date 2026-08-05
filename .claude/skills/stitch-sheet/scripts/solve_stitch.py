@@ -106,6 +106,48 @@ def search(group, gap=GAP, coarse=0.05, fine=0.001):
     return best[1], best[2]
 
 
+def corner_search(h_plain, v_plain, gap, min_corner,
+                  h_step=0.02, v_step=0.02, span=3.0):
+    """Both groups at once, so the corners can be held to a floor of their own.
+
+    Solving the groups one after another cannot do this: the clearance at a
+    corner moves with all four free parameters (angle and gap, per group), so
+    neither pass can see it. This walks both angle axes together and keeps the
+    least-extension pair that clears `min_corner`, starting from each group's own
+    least-extension angle and widening outwards.
+    """
+    h_base = search(h_plain, gap)
+    v_base = search(v_plain, gap)
+    if h_base is None or v_base is None:
+        return None
+
+    def sweep(plain, centre):
+        got = []
+        steps = int(span / h_step)
+        for i in range(steps + 1):
+            a = round(centre + i * h_step, 6)
+            e = M.extensions_for_gap(plain, a, gap)
+            if e is None:
+                continue
+            ev = M.evaluate(plain, e, a)
+            if ev['valid']:
+                got.append((a, e, ev, sum(e)))
+        return got
+
+    hs = sweep(h_plain, h_base[0])
+    vs = sweep(v_plain, v_base[0] - span) + sweep(v_plain, v_base[0])
+    best = None
+    for ha, he, hev, hsum in hs:
+        for va, ve, vev, vsum in vs:
+            w = M.worst_corner(h_plain, hev, v_plain, vev)
+            if w is None or w['clearance'] < min_corner:
+                continue
+            total = hsum + vsum
+            if best is None or total < best[0]:
+                best = (total, (ha, he), (va, ve), w['clearance'])
+    return best
+
+
 def mirrored(plain, angle_lh, exts_lh):
     """LH's answer carried across the reflection, verified on RH's own geometry."""
     for cand in (180.0 - angle_lh, -angle_lh):
@@ -156,6 +198,10 @@ def main():
     ap.add_argument('--h-ext', help='horizontal pair extensions, comma separated')
     ap.add_argument('--v-angle', type=float, help='use this vertical angle instead of solving')
     ap.add_argument('--v-ext', help='vertical pair extensions, comma separated')
+    ap.add_argument('--min-corner', type=float, default=None,
+                    help='hold the corners to this edge-to-edge clearance in px '
+                         '(%.0f matches the clearance the gap floor already implies); '
+                         'searches both groups together' % M.MIN_CORNER)
     a = ap.parse_args()
 
     if a.hand == 'lh':
@@ -180,9 +226,20 @@ def main():
     given = {'horizontal': (a.h_angle, a.h_ext), 'vertical': (a.v_angle, a.v_ext)}
     summaries = {}
 
+    joint = None
+    if a.min_corner is not None and mirror_src is None and a.h_ext is None:
+        joint = corner_search(M.group_from_strands(strands, h_order),
+                              M.group_from_strands(strands, v_order),
+                              a.gap, a.min_corner)
+        if joint is None:
+            print('  WARNING: no configuration clears %.2f px at the corners; '
+                  'solving each group on its own instead' % a.min_corner)
+
+    plains = {}
     for label, order in (('horizontal', h_order), ('vertical', v_order)):
         group = build_group(strands, order)
         plain = M.group_from_strands(strands, order)
+        plains[label] = plain
         forced = False
 
         angle_in, ext_in = given[label]
@@ -203,6 +260,9 @@ def main():
         elif mirror_src is not None:
             src_grp = mirror_src[label]
             got = mirrored(plain, src_grp['angle'], list(src_grp['extensions']))
+        elif joint is not None:
+            angle, exts = joint[1] if label == 'horizontal' else joint[2]
+            got = (angle, list(exts))
         else:
             got = search(plain, a.gap)
 
@@ -225,6 +285,24 @@ def main():
             source='given' if forced else ('mirrored' if mirror_src else 'solved'),
             valid=res['valid'],
             message=res['message'])
+
+    # The corners are scored last, because they need both groups placed.
+    corner = None
+    h_plain, v_plain = plains['horizontal'], plains['vertical']
+    if summaries['horizontal']['success'] and summaries['vertical']['success']:
+        hev = M.evaluate(h_plain, summaries['horizontal']['extensions'],
+                         summaries['horizontal']['angle'])
+        vev = M.evaluate(v_plain, summaries['vertical']['extensions'],
+                         summaries['vertical']['angle'])
+        w = M.worst_corner(h_plain, hev, v_plain, vev)
+        if w:
+            corner = dict(clearance=round(w['clearance'], 4), end=w['end'],
+                          against=w['against'], kind=w['kind'],
+                          floor=M.MIN_CORNER, clears=w['clearance'] >= M.MIN_CORNER)
+            if not corner['clears']:
+                print('  NOTE corner clearance %.2f px is under the %.0f px the gap '
+                      'floor implies (%s meets %s)'
+                      % (w['clearance'], M.MIN_CORNER, w['end'], w['against']))
 
     _set_active_strands(data, strands)
     open(os.path.join(a.out, tag + '_final.json'), 'w').write(json.dumps(data, indent=1))
@@ -261,17 +339,19 @@ def main():
                     if s['type'] == 'MaskedStrand' and is_cont_mask(s)],
         geometry=[geom(x) for x in cont],
         horizontal=summaries['horizontal'], vertical=summaries['vertical'],
+        corner=corner,
         search=dict(solver='closed-form', target_gap=a.gap, angle_step=0.001,
                     given_h=a.h_ext is not None, given_v=a.v_ext is not None,
                     ext_max=M.EXT_MAX, angle_mode='unrestricted',
                     h_pairs=max((len(h_order) + 1) // 2, 1),
                     v_pairs=max((len(v_order) + 1) // 2, 1),
-                    mirrored_from=os.path.basename(a.mirror_of) if a.mirror_of else None),
+                    mirrored_from=os.path.basename(a.mirror_of) if a.mirror_of else None,
+                    min_corner=a.min_corner, joint_corner_search=joint is not None),
         timing=dict(total_s=round(time.time() - started, 2)))
     open(os.path.join(a.out, tag + '.json'), 'w').write(json.dumps(summary, indent=1))
 
     h, v = summaries['horizontal'], summaries['vertical']
-    print('%-16s H %-4s ang %8s gap %7s var %8s win %-5s | V %-4s ang %8s gap %7s | %5.1fs' % (
+    print('%-16s H %-4s ang %8s gap %7s var %8s win %-5s | V %-4s ang %8s gap %7s | corner %7s | %5.1fs' % (
         tag,
         'ok' if h['success'] else 'FAIL',
         '%.3f' % h['angle'] if h['angle'] is not None else '-',
@@ -281,6 +361,7 @@ def main():
         'ok' if v['success'] else 'FAIL',
         '%.3f' % v['angle'] if v['angle'] is not None else '-',
         '%.3f' % v['gap'] if v['gap'] else '-',
+        '%+.2f' % corner['clearance'] if corner else '-',
         time.time() - started))
 
 

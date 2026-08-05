@@ -186,6 +186,64 @@ def extensions_for_gap(group, angle_deg, gap):
     return best[1] if best else None
 
 
+# --- corners: the one clearance neither alignment pass measures -------------
+#
+# `_numpy_try_all_angles` scores gaps between CONSECUTIVE strands of ONE group.
+# The horizontal and vertical groups are aligned in two independent passes, so
+# where a free end of one comes to rest against a strand of the other is scored
+# by neither. At the extreme ends of both groups - the corners - that is exactly
+# what decides whether the stitch reads cleanly or has a cap buried in a ribbon.
+#
+# A crossing between the groups is intended; that is what the _4/_5 masks are
+# for. What is not intended is a free END arriving hard against another strand,
+# so this measures endpoint-to-segment, not segment-to-segment.
+
+OUTER_HALF = 25.0        # strand half width 23 + stroke 2
+
+
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy)), t
+
+
+def corner_clearances(group_a, eval_a, group_b, eval_b, half=OUTER_HALF):
+    """Every free end of one group against every strand of the other.
+
+    A continuation's free end is its `end`; its `start` is attached to its own
+    _2/_3 arm. Clearance is edge to edge: centre distance minus the two half
+    widths, so 0 means the outlines touch and negative means they overlap.
+    """
+    rows = []
+    for label, (ga, ea), (gb, eb) in (('h_end_vs_v', (group_a, eval_a), (group_b, eval_b)),
+                                      ('v_end_vs_h', (group_b, eval_b), (group_a, eval_a))):
+        if not ea.get('gaps') or not eb.get('gaps'):
+            return []
+        for i, sa in enumerate(ga):
+            px, py = ea['ends'][i]
+            for j, sb in enumerate(gb):
+                ax, ay = eb['starts'][j]
+                bx, by = eb['ends'][j]
+                d, t = _point_segment_distance(px, py, ax, ay, bx, by)
+                rows.append(dict(kind=label, end=sa['name'], against=sb['name'],
+                                 centre=d, clearance=d - 2 * half, along=t))
+    rows.sort(key=lambda r: r['clearance'])
+    return rows
+
+
+def worst_corner(group_a, eval_a, group_b, eval_b, half=OUTER_HALF):
+    """The tightest corner, or None if either group has no valid geometry."""
+    rows = corner_clearances(group_a, eval_a, group_b, eval_b, half)
+    return rows[0] if rows else None
+
+
+# The gap floor is 56 px centre to centre between 50 px-wide outlines, so the
+# clearance the aligner already demands between neighbours is 6 px. Holding the
+# corners to the same figure keeps one rule for the whole stitch.
+MIN_CORNER = MIN_GAP - 2 * OUTER_HALF
+
+
 def natural_angle(group):
     """The generated continuation's own direction - the centre of the aligner's window."""
     g = group[0]

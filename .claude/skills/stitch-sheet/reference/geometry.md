@@ -209,6 +209,57 @@ vertical — and a reflection takes t to 180 − t while leaving the extensions
 alone. Mirror RH rather than re-searching it (see the 2 × 2 disagreement below,
 which is exactly what re-searching costs you).
 
+## The corners — the clearance neither pass measures
+
+`_numpy_try_all_angles` scores gaps between **consecutive strands of one
+group**. The horizontal and vertical groups are aligned in two independent
+passes, so where a free end of one comes to rest against a strand of the other
+is scored by neither. At the far ends of both groups — the corners — that is
+what decides whether a cap sits clear or is buried in a ribbon.
+
+A crossing between the groups is intended; that is what the `_4/_5` masks are
+for. What is not intended is a free *end* arriving hard against another strand,
+so `alignment_model.corner_clearances` measures endpoint against segment, edge
+to edge: **0 means the outlines touch, negative means they overlap**. The gap
+floor is 56 px between 50 px-wide outlines, so the clearance already demanded
+between neighbours is 6 px — `MIN_CORNER` holds the corners to the same figure
+rather than inventing a new one.
+
+Every configuration measured before this check existed overlaps, the solved
+ones included:
+
+| size | source | corner | the two that meet |
+|---|---|---|---|
+| 1 × 4 | solved | −0.58 | `1_4` against `5_5` |
+| 1 × 4 | picked 1 | −2.48 | `5_4` against `1_4` |
+| 1 × 4 | picked 2 | −1.45 | `5_4` against `1_4` |
+| 1 × 5 | solved | −1.70 | `1_4` against `6_5` |
+| 1 × 5 | picked 1 | −6.08 | `6_4` against `1_4` |
+| 1 × 5 | picked 2 | −4.45 | `6_5` against `5_5` |
+
+Two perfectly optimised gap sets colliding where neither is looking. Fixing it
+is cheap, and almost entirely a vertical-group move:
+
+| size | H · LH | H · RH | V · LH | mean gap | Σ ext | corner |
+|---|---|---|---|---|---|---|
+| 1 × 4 | 146.936° | 33.064° | 77.851° | 56.100 | 155.4 | **+6.01** |
+| 1 × 5 | 150.575° | 29.425° | 79.833° | 56.100 | 222.3 | **+6.01** |
+
+At 1 × 5 the horizontal angle shifts 0.47° while the vertical comes down 2.97°
+and takes on 13.7 px of extension, for about 20 px more total than solved.
+
+`solve_stitch.py` now reports the corner on every run, and `--min-corner N`
+searches **both groups together** — it has to, because the clearance moves with
+all four free parameters and no per-group pass can see it:
+
+```bash
+python solve_stitch.py --m 1 --n 5 --k -1 --hand lh --out DIR --min-corner 6 --gap 56.1
+```
+
+About 1.3 s per size. Note the joint search needs a little headroom above the
+gap floor (`--gap 56.1` rather than 56.01): at the floor exactly, rounding the
+extensions for storage can push a gap 0.005 px under 56 and fail revalidation.
+
 ### It is not m = 1 or k = −1 specific
 
 The model is just the gap arithmetic, so the same solver runs on any size and
