@@ -209,56 +209,56 @@ vertical — and a reflection takes t to 180 − t while leaving the extensions
 alone. Mirror RH rather than re-searching it (see the 2 × 2 disagreement below,
 which is exactly what re-searching costs you).
 
-## The corners — the clearance neither pass measures
+## The corners — which side the outside pair runs
 
-`_numpy_try_all_angles` scores gaps between **consecutive strands of one
-group**. The horizontal and vertical groups are aligned in two independent
-passes, so where a free end of one comes to rest against a strand of the other
-is scored by neither. At the far ends of both groups — the corners — that is
-what decides whether a cap sits clear or is buried in a ribbon.
+Not a strand-to-strand clearance. Every crossing between the horizontal and
+vertical groups is masked and intended, so how deeply one overlaps another says
+nothing about whether the stitch reads correctly. Measuring end-to-strand
+distance and calling the overlaps defects was wrong, and the "corner-safe"
+values derived that way were meaningless — they have been removed.
 
-A crossing between the groups is intended; that is what the `_4/_5` masks are
-for. What is not intended is a free *end* arriving hard against another strand,
-so `alignment_model.corner_clearances` measures endpoint against segment, edge
-to edge: **0 means the outlines touch, negative means they overlap**. The gap
-floor is 56 px between 50 px-wide outlines, so the clearance already demanded
-between neighbours is 6 px — `MIN_CORNER` holds the corners to the same figure
-rather than inventing a new one.
+What matters at a corner is **which side of it the outside pair runs**. Each
+group is a band of parallel lines whose edges are its outside pair, reading
+indices 0 and last. The vertical continuations leave the woven block at fixed
+corners that do not move when either group is aligned. A configuration is
+corner-safe when the horizontal outside pair passes **outside** those corners
+rather than cutting across inside them, so the measurement is the signed offset
+of each corner from the nearer outer line, positive when outside.
 
-Every configuration measured before this check existed overlaps, the solved
-ones included:
+Measured in that one direction only. The reverse is not a corner: at m = 1 the
+vertical group is a single pair spanning one gap, so nearly every horizontal
+start lies far outside its band and the number means nothing.
 
-| size | source | corner | the two that meet |
+| size | source | margin | corner |
 |---|---|---|---|
-| 1 × 4 | solved | −0.58 | `1_4` against `5_5` |
-| 1 × 4 | picked 1 | −2.48 | `5_4` against `1_4` |
-| 1 × 4 | picked 2 | −1.45 | `5_4` against `1_4` |
-| 1 × 5 | solved | −1.70 | `1_4` against `6_5` |
-| 1 × 5 | picked 1 | −6.08 | `6_4` against `1_4` |
-| 1 × 5 | picked 2 | −4.45 | `6_5` against `5_5` |
+| 1 × 4 | solved | **+0.700** | `1_4`, outside |
+| 1 × 4 | picked 1 | −4.256 | `1_4`, inside |
+| 1 × 4 | picked 2 | **+0.706** | `1_4`, outside |
+| 1 × 5 | solved | −3.666 | `1_4`, inside |
+| 1 × 5 | picked 1 | −9.689 | `1_4`, inside |
+| 1 × 5 | picked 2 | **−0.236** | `5_5`, inside |
 
-Two perfectly optimised gap sets colliding where neither is looking. Fixing it
-is cheap, and almost entirely a vertical-group move:
+1 × 4's configurations clear by about 0.7 px. 1 × 5's do not, and the margin is
+what separates them — its picked 2 sits a quarter of a pixel inside, the outer
+line effectively passing through the corner, against 3.7 px for solved and
+9.7 px for picked 1.
 
-| size | H · LH | H · RH | V · LH | mean gap | Σ ext | corner |
-|---|---|---|---|---|---|---|
-| 1 × 4 | 146.936° | 33.064° | 77.851° | 56.100 | 155.4 | **+6.01** |
-| 1 × 5 | 150.575° | 29.425° | 79.833° | 56.100 | 222.3 | **+6.01** |
+`solve_stitch.py` reports the margin on every run and notes when the outside
+pair cuts inside. `--min-corner N` searches both groups together for a margin of
+at least N, which it has to: the margin moves with all four free parameters and
+no per-group pass can see it.
 
-At 1 × 5 the horizontal angle shifts 0.47° while the vertical comes down 2.97°
-and takes on 13.7 px of extension, for about 20 px more total than solved.
+### 1 × 5, picked 2
 
-`solve_stitch.py` now reports the corner on every run, and `--min-corner N`
-searches **both groups together** — it has to, because the clearance moves with
-all four free parameters and no per-group pass can see it:
+The configuration that gets closest to the corner, arrived at by hand:
 
-```bash
-python solve_stitch.py --m 1 --n 5 --k -1 --hand lh --out DIR --min-corner 6 --gap 56.1
+```
+H · LH 153.034°  ext 13.0371  97.1387  16.4454  70.2409  43.3432   gaps 56.010 uniform
+V · LH  75.882°  ext 35.2704                                       gap  61.850
 ```
 
-About 1.3 s per size. Note the joint search needs a little headroom above the
-gap floor (`--gap 56.1` rather than 56.01): at the floor exactly, rounding the
-extensions for storage can push a gap 0.005 px under 56 and fail revalidation.
+Spread 504.09 — the minimum, since spread is (2n−1)·g and g is at the floor.
+RH mirrors exactly: `H 26.966°`, `V −75.882°`, same extensions.
 
 ### It is not m = 1 or k = −1 specific
 

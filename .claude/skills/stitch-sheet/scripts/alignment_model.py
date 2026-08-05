@@ -186,62 +186,65 @@ def extensions_for_gap(group, angle_deg, gap):
     return best[1] if best else None
 
 
-# --- corners: the one clearance neither alignment pass measures -------------
+# --- corners: does the outside pair clear the opposite group's start? -------
 #
-# `_numpy_try_all_angles` scores gaps between CONSECUTIVE strands of ONE group.
-# The horizontal and vertical groups are aligned in two independent passes, so
-# where a free end of one comes to rest against a strand of the other is scored
-# by neither. At the extreme ends of both groups - the corners - that is exactly
-# what decides whether the stitch reads cleanly or has a cap buried in a ribbon.
+# Not a strand-to-strand clearance. Every crossing between the two groups is
+# masked and intended, so measuring how deep one overlaps another says nothing.
 #
-# A crossing between the groups is intended; that is what the _4/_5 masks are
-# for. What is not intended is a free END arriving hard against another strand,
-# so this measures endpoint-to-segment, not segment-to-segment.
+# What matters at a corner is which SIDE of it the outside pair runs. Each group
+# is a band of parallel lines; its outside pair - reading indices 0 and last -
+# are the two edges of that band. The opposite group's continuations start from
+# the corners of the woven block. The stitch reads correctly when the outside
+# pair passes OUTSIDE those starting corners rather than cutting across inside
+# them, so the measurement is the signed offset of each corner from the nearer
+# outer line, positive when the corner is on the outside.
 
-OUTER_HALF = 25.0        # strand half width 23 + stroke 2
+def _perp_coord(x, y, angle_deg):
+    t = math.radians(angle_deg)
+    return x * math.sin(t) - y * math.cos(t)
 
 
-def _point_segment_distance(px, py, ax, ay, bx, by):
-    dx, dy = bx - ax, by - ay
-    L2 = dx * dx + dy * dy
-    t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L2))
-    return math.hypot(px - (ax + t * dx), py - (ay + t * dy)), t
+def corner_margins(group, group_eval, other_group):
+    """Signed offset of each of `other_group`'s starting corners from `group`'s
+    outside pair, in px. Positive means the corner is outside the band, which is
+    what a corner-safe configuration wants; negative means the outside strand
+    cuts across inside the corner.
 
-
-def corner_clearances(group_a, eval_a, group_b, eval_b, half=OUTER_HALF):
-    """Every free end of one group against every strand of the other.
-
-    A continuation's free end is its `end`; its `start` is attached to its own
-    _2/_3 arm. Clearance is edge to edge: centre distance minus the two half
-    widths, so 0 means the outlines touch and negative means they overlap.
+    The corners are the opposite group's UNEXTENDED starts - the points on the
+    woven block its continuations leave from, which do not move when that group
+    is aligned.
     """
+    if not group_eval.get('gaps'):
+        return []
+    angle = group_eval['angle']
+    edges = [_perp_coord(group_eval['starts'][0][0], group_eval['starts'][0][1], angle),
+             _perp_coord(group_eval['starts'][-1][0], group_eval['starts'][-1][1], angle)]
+    lo, hi = min(edges), max(edges)
     rows = []
-    for label, (ga, ea), (gb, eb) in (('h_end_vs_v', (group_a, eval_a), (group_b, eval_b)),
-                                      ('v_end_vs_h', (group_b, eval_b), (group_a, eval_a))):
-        if not ea.get('gaps') or not eb.get('gaps'):
-            return []
-        for i, sa in enumerate(ga):
-            px, py = ea['ends'][i]
-            for j, sb in enumerate(gb):
-                ax, ay = eb['starts'][j]
-                bx, by = eb['ends'][j]
-                d, t = _point_segment_distance(px, py, ax, ay, bx, by)
-                rows.append(dict(kind=label, end=sa['name'], against=sb['name'],
-                                 centre=d, clearance=d - 2 * half, along=t))
-    rows.sort(key=lambda r: r['clearance'])
+    for s in other_group:
+        w = _perp_coord(s['start'][0], s['start'][1], angle)
+        margin = (lo - w) if abs(w - lo) <= abs(w - hi) else (w - hi)
+        rows.append(dict(corner=s['name'], margin=margin,
+                         side='outside' if margin >= 0 else 'inside'))
+    rows.sort(key=lambda r: r['margin'])
     return rows
 
 
-def worst_corner(group_a, eval_a, group_b, eval_b, half=OUTER_HALF):
-    """The tightest corner, or None if either group has no valid geometry."""
-    rows = corner_clearances(group_a, eval_a, group_b, eval_b, half)
+def worst_corner(h_group, h_eval, v_group, v_eval):
+    """The tightest corner, or None without valid geometry.
+
+    Measured in one direction only: the HORIZONTAL group's outside pair against
+    the VERTICAL group's starting corners. The reverse is not a corner - at
+    m = 1 the vertical group is a single pair spanning one gap, so almost every
+    horizontal start lies far outside its band and the number means nothing.
+    """
+    rows = corner_margins(h_group, h_eval, v_group)
     return rows[0] if rows else None
 
 
-# The gap floor is 56 px centre to centre between 50 px-wide outlines, so the
-# clearance the aligner already demands between neighbours is 6 px. Holding the
-# corners to the same figure keeps one rule for the whole stitch.
-MIN_CORNER = MIN_GAP - 2 * OUTER_HALF
+# A corner is safe when the outside pair reaches it - margin 0 puts the outer
+# line exactly through the starting corner, which is the intent.
+MIN_CORNER = 0.0
 
 
 def natural_angle(group):

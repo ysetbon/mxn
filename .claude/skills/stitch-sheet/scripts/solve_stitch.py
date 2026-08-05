@@ -140,11 +140,11 @@ def corner_search(h_plain, v_plain, gap, min_corner,
     for ha, he, hev, hsum in hs:
         for va, ve, vev, vsum in vs:
             w = M.worst_corner(h_plain, hev, v_plain, vev)
-            if w is None or w['clearance'] < min_corner:
+            if w is None or w['margin'] < min_corner:
                 continue
             total = hsum + vsum
             if best is None or total < best[0]:
-                best = (total, (ha, he), (va, ve), w['clearance'])
+                best = (total, (ha, he), (va, ve), w['margin'])
     return best
 
 
@@ -199,9 +199,9 @@ def main():
     ap.add_argument('--v-angle', type=float, help='use this vertical angle instead of solving')
     ap.add_argument('--v-ext', help='vertical pair extensions, comma separated')
     ap.add_argument('--min-corner', type=float, default=None,
-                    help='hold the corners to this edge-to-edge clearance in px '
-                         '(%.0f matches the clearance the gap floor already implies); '
-                         'searches both groups together' % M.MIN_CORNER)
+                    help='require the outside pair to pass at least this far outside '
+                         'the opposite group\'s starting corners, in px (0 puts the '
+                         'outer line exactly through them); searches both groups together')
     a = ap.parse_args()
 
     if a.hand == 'lh':
@@ -232,7 +232,7 @@ def main():
                               M.group_from_strands(strands, v_order),
                               a.gap, a.min_corner)
         if joint is None:
-            print('  WARNING: no configuration clears %.2f px at the corners; '
+            print('  WARNING: no configuration reaches %.2f px outside the corners; '
                   'solving each group on its own instead' % a.min_corner)
 
     plains = {}
@@ -296,13 +296,12 @@ def main():
                          summaries['vertical']['angle'])
         w = M.worst_corner(h_plain, hev, v_plain, vev)
         if w:
-            corner = dict(clearance=round(w['clearance'], 4), end=w['end'],
-                          against=w['against'], kind=w['kind'],
-                          floor=M.MIN_CORNER, clears=w['clearance'] >= M.MIN_CORNER)
+            corner = dict(margin=round(w['margin'], 4), corner=w['corner'],
+                          side=w['side'], floor=M.MIN_CORNER,
+                          clears=w['margin'] >= M.MIN_CORNER)
             if not corner['clears']:
-                print('  NOTE corner clearance %.2f px is under the %.0f px the gap '
-                      'floor implies (%s meets %s)'
-                      % (w['clearance'], M.MIN_CORNER, w['end'], w['against']))
+                print('  NOTE the outside pair cuts %.2f px inside the %s corner'
+                      % (-w['margin'], w['corner']))
 
     _set_active_strands(data, strands)
     open(os.path.join(a.out, tag + '_final.json'), 'w').write(json.dumps(data, indent=1))
@@ -361,7 +360,7 @@ def main():
         'ok' if v['success'] else 'FAIL',
         '%.3f' % v['angle'] if v['angle'] is not None else '-',
         '%.3f' % v['gap'] if v['gap'] else '-',
-        '%+.2f' % corner['clearance'] if corner else '-',
+        '%+.2f' % corner['margin'] if corner else '-',
         time.time() - started))
 
 
