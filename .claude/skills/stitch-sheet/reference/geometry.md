@@ -144,24 +144,34 @@ Gaps are uniform at 56.010 px, gap variance ~10⁻²⁶. `scripts/solve_stitch.p
 does this end to end in about half a second per size, against the ~4 min the
 combo search needs at 4 pairs.
 
-That table is the *best* member of each family, not the only one. A recorded
-alternative at 1 × 4, steered by hand and applied with `--h-angle/--h-ext`:
+That table is the *best* member of each family, not the only one. Two recorded
+alternatives at 1 × 4, steered by hand and applied with `--h-angle/--h-ext`:
 
-```
-H · LH 149.253°   ext 25.3  81.9  6.4  43.2   mean gap 58.108  var 0.226  spread 406.76
-V · LH  72.645°   ext 31.9                    gap 58.502
-```
+| | H · LH | H · RH | V · LH | ext (H) | mean gap | var | spread | Σ ext | in window |
+|---|---|---|---|---|---|---|---|---|---|
+| solved | 146.675° | 33.325° | 80.819° | 25.02 67.12 0 33.56 | 56.010 | ~0 | 392.07 | 125.7 | yes |
+| picked 1 | 149.253° | 30.747° | 72.645° | 25.3 81.9 6.4 43.2 | 58.108 | 0.226 | 406.76 | 156.8 | **no** |
+| picked 2 | 148.642° | 31.358° | 73.176° | 20.80 73.79 6.76 40.27 | 56.539 | 9.5e-6 | 395.78 | 141.6 | yes |
 
-Valid — all seven gaps in band, and palindromic — but wider and slightly uneven
-against the solved 56.010, and outside the aligner's window, which at that
-outermost extension has moved to 108.57–148.57°. Its RH mirror is exact:
-`H 30.747°`, `V −72.645°`, same extensions, gaps identical to 10⁻⁹ px.
+All three valid, all palindromic in their gaps. RH is the exact mirror in every
+case (`180 − H_LH`, `−V_LH`, extensions unchanged, gaps equal to 10⁻⁹ px).
 
-Worth knowing from that comparison: **the angle sets the gap, the extensions
-only decide how evenly it is shared.** Holding 149.253° and moving two pairs
-about 1.5 px (81.9 → 82.9, 6.4 → 4.9) drops the variance from 0.226 to
-2.7 × 10⁻⁴ at the same 58.11 px mean. So a hand-chosen angle costs nothing in
-evenness — it is the gap size you are choosing.
+The pair is instructive about what each parameter buys. Picked 1 sits 2.6°
+above the solved angle, which widens the gap to 58.11 and — because its
+outermost pair is extended 25.3 px — swings the ±20° window down to
+108.57–148.57°, past its own angle. Picked 2 comes back 0.6° to 148.642° and
+evens the gaps out at 56.54: inside the window again, 15 px less total
+extension, 11 px tighter overall.
+
+So **the angle sets the gap; the extensions only decide how evenly that gap is
+shared.** Holding picked 1's 149.253° and moving two pairs about 1.5 px
+(81.9 → 82.9, 6.4 → 4.9) drops the variance from 0.226 to 2.7 × 10⁻⁴ at an
+unchanged 58.11 px mean. Choosing an angle by eye costs nothing in evenness —
+it is the gap size being chosen.
+
+(Picked 2's variance is 9.5 × 10⁻⁶ rather than ~0 only because its extensions
+are recorded to 2 dp; at full precision it is uniform. The gaps span
+56.535–56.543, i.e. 8 thousandths of a pixel.)
 
 `H_RH = 180 − H_LH` and `V_RH = −V_LH` hold **exactly** here, and not as a
 coincidence: RH's geometry is LH's reflected about x = 1232 — measured 0.0 px
