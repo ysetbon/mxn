@@ -97,6 +97,70 @@ aligner then run with `max_pair_extension=0` and a tight
 for any n. Only do this where the closed form is known to hold (m = 1, k = +1);
 otherwise let the search run.
 
+## k = −1, m = 1 — the swirl, in closed form
+
+There is one, and it covers every n. Put the group's shared angle t against the
+only coordinate that separates the lines, `W = x·sin t − y·cos t`; every gap the
+aligner measures is `W_i+1 − W_i`, and extending a strand slides its start along
+a fixed direction, so W is linear in that strand's pair extension. Reading order
+`i = 0 … 2n−1`, pair index `0, 1, …, n−1, n−1, …, 1, 0`, `s = sin t`, `c = cos t`:
+
+```
+both ends   g = -88 s - 144 c - s·e_1 - c·e_0
+odd  gaps   g =  (120 + e_j + e_j+1)·s +  56 c
+even gaps   g = -(120 + e_j + e_j+1)·s - 168 c
+middle      the same, with (e_j + e_j+1) replaced by 2·e_n-1
+```
+
+Same 120 / 56 / 168 frame as the k = +1 form above — k changes which continuation
+joins which, not the frame they sit in. Verified against the generator's own
+geometry for n = 2 … 8: max deviation 5 × 10⁻¹³ px.
+
+Because the pair index is a palindrome, the interior equations come in identical
+pairs: only **n** of the 2n−1 gap equations are distinct, against n+2 unknowns
+(e_0 … e_n-1, g, t). So every size has a **two-parameter family** of exact
+solutions — fix t and g and the extensions follow with no search:
+
+```
+U =  (g -  56 c)/s - 120       e_n-1 = (U or V)/2        by the parity of n-1
+V = -(g + 168 c)/s - 120       e_j   = (U or V) - e_j+1  for j = n-2 … 1
+                               e_0   = (-88 s - 144 c - s·e_1 - g)/c
+```
+
+Driving g to the 56 px floor minimises the aligner's first two ranking criteria
+at once; least total extension is then its own third. That canonical pick, LH:
+
+| n | H · LH | V · LH | spread | extensions (outermost pair first) |
+|---|---|---|---|---|
+| 2 | 141.063° | 70.177° | 168.03 | 14.63 19.22 |
+| 3 | 141.279° | 77.378° | 280.05 | 29.92 39.39 0 |
+| 4 | 146.675° | 80.819° | 392.07 | 25.02 67.12 0 33.56 |
+| 5 | 150.109° | 82.803° | 504.09 | 22.81 89.81 0 59.87 29.94 |
+| 6 | 152.573° | 84.091° | 616.11 | 21.60 109.50 0 82.13 27.38 54.75 |
+| 7 | 154.464° | 84.988° | 728.13 | 20.86 127.14 0 101.71 25.43 76.29 50.86 |
+| 8 | 155.980° | 85.648° | 840.15 | 20.38 143.26 0 119.38 23.88 95.50 47.75 71.63 |
+
+Gaps are uniform at 56.010 px, gap variance ~10⁻²⁶. `scripts/solve_stitch.py`
+does this end to end in about half a second per size, against the ~4 min the
+combo search needs at 4 pairs.
+
+`H_RH = 180 − H_LH` and `V_RH = −V_LH` hold **exactly** here, and not as a
+coincidence: RH's geometry is LH's reflected about x = 1232 — measured 0.0 px
+deviation, index for index in the horizontal group and in reverse order in the
+vertical — and a reflection takes t to 180 − t while leaving the extensions
+alone. Mirror RH rather than re-searching it (see the 2 × 2 disagreement below,
+which is exactly what re-searching costs you).
+
+### It is not m = 1 or k = −1 specific
+
+The model is just the gap arithmetic, so the same solver runs on any size and
+any k. Spot-checked against known answers: at 1 × 3, k = +1 it returns
+−146.679° with extensions 67.13 / 0.02 / 33.57, reproducing the k = +1 closed
+form's −146.68° and [67, 0, 34]. At k = −1 it improves sizes the sweep *did*
+solve — 2 × 2 goes from spread 172.03, variance 0.465 to spread 168.03,
+variance 10⁻²⁶ — and 3 × 3 and 2 × 3 also land on uniform 56.010 px gaps. Those
+four sizes are what has been checked; a full 8 × 8 re-sweep has not been run.
+
 ## Two exact symmetries — forecast instead of searching
 
 Measured across the full 8 × 8 sweep at k = −1, both hands (63 sizes, 126 runs),
@@ -113,8 +177,11 @@ horizontal group turned 90°, so **every angle in a grid follows from the
 horizontal LH search alone** — one independent quantity per (m, n) rather than
 four. On an 8 × 8 grid that is a 4× cut in search cost.
 
-**The hand mirror is not safe to derive from.** At 2 × 2 the two hands settle on
-different optima — LH lands on angle 162.82°, spread 172.03, gap variance 0.465,
+**The hand mirror is not safe to derive from *a search*.** The geometry mirrors
+exactly — RH is LH reflected about x = 1232, measured to 0.0 px — so mirroring a
+*solution* is sound and is what `solve_stitch.py --mirror-of` does. What is not
+sound is expecting two independent searches to agree. At 2 × 2 the two hands
+settle on different optima — LH lands on angle 162.82°, spread 172.03, gap variance 0.465,
 extensions [0, 70]; RH on 22.07° (not the mirrored 17.18°), spread 170.41,
 variance 0.516, extensions [10, 30]. The two spreads are 1.6 px apart, inside the
 aligner's own 2 px tie band, so both are legitimate. The geometry is symmetric;
@@ -157,17 +224,42 @@ Note also that k = +1's hand mirror is `H_RH = −(180 + H_LH)` while k = −1's
 `H_RH = 180 − H_LH`, and the transpose law that is exact 63/63 at k = −1 is only
 approximate at k = +1 (off ~1–2° at 2×3 and 3×2). Re-derive these per k.
 
-## Where k = −1 stops solving
+## Where k = −1 stops solving — and why it is the window, not the geometry
 
-Same sweep: a group whose pair count is ≥ 7 never aligned — the aligner returned
-`is_fallback` with gaps around 150 px, far outside the `[56, 69]` band. This is
-not a search-budget artifact: raising `max_pair_extension` from 200 to 600 made
-1 × 8 *worse* (gap 69.8 → 79.3), and a 40× finer grid did not clear it either.
-Pair counts ≤ 5 always solved; 6 solved except where both dimensions were 6+.
-When a group solves at k = −1 it solves cleanly; there is no ambiguous middle.
-(The 57–61 px gaps first measured for solved groups were an artifact of the 0.5°
-angle grid — re-searched at 0.1° they tighten to roughly 56.1–56.9 px, against a
-56 px floor.)
+Observed first as: a group whose pair count is ≥ 7 never aligned, and at m = 1
+nothing above 1 × 3 aligned either — `is_fallback`, gaps up to 170 px, far
+outside the `[56, 69]` band. Raising `max_pair_extension` from 200 to 600 made
+1 × 8 *worse* (gap 69.8 → 79.3), and a 40× finer grid did not clear it.
+
+**Exact solutions exist at every one of those sizes.** The blocker is the
+aligner's search *domain*. Re-asked as an exact feasibility question — is there
+any point at all in the space the search was allowed to visit — over the m = 1
+family, LH horizontal:
+
+| size | any solution inside the window | on the 10 px extension grid | what actually blocked it |
+|---|---|---|---|
+| 1 × 2 | 123.62–153.67° | 123.62–153.67° | nothing, the sweep found it |
+| 1 × 3 | 141.32–153.67° | 141.32–151.42° | nothing, the sweep found it |
+| 1 × 4 | 146.67–151.42° | **147.62–147.72°** | the angle step. One extension vector works, [30, 80, 0, 40], across 0.10° — and the sweep stepped 0.5°. |
+| 1 × 5 … 1 × 8 | none | none | the angle window |
+
+The window is `first strand's direction to its target ± 20°`, and it is
+recomputed per combo **after** that strand has been extended — so extending the
+outermost pair swings it down. 1 × 5 needs 150.11°, which its window contains at
+e₀ = 0 (113.67–153.67°); but reaching 150.11° needs e₀ = 22.8 px, and at that
+extension the window has moved to 109.03–149.03° and no longer contains it. The
+same trap at 1 × 6, 1 × 7, 1 × 8. No angle step and no extension grid can close
+that — the domain is empty, so `is_fallback` was the honest answer to the
+question the aligner was asked.
+
+Use `scripts/solve_stitch.py` for these instead of refining the search. It works
+off the closed form above rather than the window, and it reports
+`in_aligner_window` per group so a solution the aligner could never have reached
+is visible as such rather than silently mixed in with ones it could.
+
+(The 57–61 px gaps first measured for solved groups were a separate artifact, of
+the 0.5° angle grid — re-searched at 0.1° they tighten to roughly 56.1–56.9 px,
+against a 56 px floor.)
 
 ## The angle step is not a free knob
 

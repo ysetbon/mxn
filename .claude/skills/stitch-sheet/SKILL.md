@@ -69,6 +69,22 @@ Each run writes `<tag>_start.json`, `<tag>_final.json` and `<tag>.json`
 settings, timings). One line per run is printed — check for `FAIL` or
 `fallback`, and report them honestly rather than hiding them.
 
+**On `fallback`, reach for `solve_stitch.py` before reaching for a finer grid.**
+A fallback usually means the aligner's ±20° angle window did not contain a
+solution, not that none exists — at k = −1 that is what happens to every 1 × n
+above 1 × 3. Same arguments, same output files, plus `in_aligner_window` per
+group so a solution the search could never have reached stays labelled:
+
+```bash
+python $S/solve_stitch.py --m 1 --n 5 --k -1 --hand lh --out $OUT
+python $S/solve_stitch.py --m 1 --n 5 --k -1 --hand rh --out $OUT \
+       --mirror-of $OUT/lh_1x5_k-1.json      # RH is LH reflected — mirror, don't re-search
+```
+
+It solves rather than samples, so it returns uniform gaps at the 56 px floor in
+under a second where the combo search needs minutes. `reference/geometry.md`
+has the closed form it uses and the measurements behind the window diagnosis.
+
 At **k = 0** both alignment passes return `preserve_continuation` with the
 message *"k=0: _4/_5 alignment matches continuation exactly, no adjustment
 needed"*. That is expected: the box needs no alignment. The same happens for the
@@ -118,6 +134,9 @@ asked to update an existing sheet, pass its `url`.
 ## Files
 
 - `scripts/run_stitch.py` — one stitch: generate → align → summary JSON
+- `scripts/solve_stitch.py` — same outputs, solved from the closed form instead
+  of searched. Use it wherever `run_stitch.py` reports `fallback`
+- `scripts/alignment_model.py` — the gap test and its inverse, standalone
 - `scripts/build_sheet.py` — results directory → artifact HTML
 - `scripts/render_strands.py` — JSON → SVG (paint order, palette, labels)
 - `assets/template.html` — page shell: CSS, layout, chart hover script
