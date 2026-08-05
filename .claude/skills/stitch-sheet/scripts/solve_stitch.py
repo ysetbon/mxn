@@ -152,6 +152,10 @@ def main():
                     help='target gap; anything in [56, 69] is legal, the floor is optimal')
     ap.add_argument('--mirror-of',
                     help='an LH summary JSON to reflect instead of re-searching (RH only)')
+    ap.add_argument('--h-angle', type=float, help='use this horizontal angle instead of solving')
+    ap.add_argument('--h-ext', help='horizontal pair extensions, comma separated')
+    ap.add_argument('--v-angle', type=float, help='use this vertical angle instead of solving')
+    ap.add_argument('--v-ext', help='vertical pair extensions, comma separated')
     a = ap.parse_args()
 
     if a.hand == 'lh':
@@ -173,13 +177,30 @@ def main():
         a.m, a.n, a.k, direction)
 
     mirror_src = json.load(open(a.mirror_of)) if a.mirror_of else None
+    given = {'horizontal': (a.h_angle, a.h_ext), 'vertical': (a.v_angle, a.v_ext)}
     summaries = {}
 
     for label, order in (('horizontal', h_order), ('vertical', v_order)):
         group = build_group(strands, order)
         plain = M.group_from_strands(strands, order)
+        forced = False
 
-        if mirror_src is not None:
+        angle_in, ext_in = given[label]
+        if angle_in is not None and ext_in is not None:
+            # Values handed in - typically steered by hand and copied out of the
+            # bench. Applied as given, never quietly adjusted; the gap test still
+            # runs and a failure is reported rather than repaired.
+            exts = [float(x) for x in ext_in.replace(',', ' ').split()]
+            want = len(M.pairs_of(len(plain)))
+            if len(exts) != want:
+                sys.exit('%s: expected %d extensions, got %d' % (label, want, len(exts)))
+            ev = M.evaluate(plain, exts, angle_in)
+            if not ev['valid']:
+                print('  WARNING %s: the given values fail the gap test - %s'
+                      % (label, ev['reason'] or 'invalid'))
+            got = (angle_in, exts)
+            forced = True
+        elif mirror_src is not None:
             src_grp = mirror_src[label]
             got = mirrored(plain, src_grp['angle'], list(src_grp['extensions']))
         else:
@@ -201,6 +222,8 @@ def main():
             extensions=[round(x, 4) for x in exts],
             gaps=[round(g, 4) for g in res['gaps']],
             in_aligner_window=M.in_aligner_window(plain, angle, exts[0]),
+            source='given' if forced else ('mirrored' if mirror_src else 'solved'),
+            valid=res['valid'],
             message=res['message'])
 
     _set_active_strands(data, strands)
@@ -239,6 +262,7 @@ def main():
         geometry=[geom(x) for x in cont],
         horizontal=summaries['horizontal'], vertical=summaries['vertical'],
         search=dict(solver='closed-form', target_gap=a.gap, angle_step=0.001,
+                    given_h=a.h_ext is not None, given_v=a.v_ext is not None,
                     ext_max=M.EXT_MAX, angle_mode='unrestricted',
                     h_pairs=max((len(h_order) + 1) // 2, 1),
                     v_pairs=max((len(v_order) + 1) // 2, 1),
