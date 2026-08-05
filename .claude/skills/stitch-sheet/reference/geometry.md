@@ -173,6 +173,35 @@ it is the gap size being chosen.
 are recorded to 2 dp; at full precision it is uniform. The gaps span
 56.535–56.543, i.e. 8 thousandths of a pixel.)
 
+### Carrying a pick to another size
+
+Read this way, each pick is **two lengths in px**: the gap it runs at, and how
+far the shallowest arm is lifted off zero. The solved configuration is the case
+where that lift is zero — which is exactly why it sits on the edge of the band
+and is the least-extension member. Carrying both lengths unchanged fixes the
+angle at any other size, because the lift rises monotonically from the band edge
+to a peak before falling back to zero at the far edge (a different arm empties
+at each end, so search the *rising* branch only). The vertical group is the same
+with its single extension in place of the lift.
+
+Carried from 1 × 4 to 1 × 5:
+
+| | H · LH | H · RH | V · LH | mean gap | spread | Σ ext |
+|---|---|---|---|---|---|---|
+| picked 1 | 153.031° | 26.969° | 76.225° | 58.110 | 522.99 | 260.0 |
+| picked 2 | 151.861° | 28.139° | 76.659° | 56.539 | 508.85 | 228.7 |
+
+Both uniform to 10⁻⁸ and valid. The construction reproduces 1 × 4's vertical
+angles to four decimals from the extension alone (72.6450 and 73.1759 against
+the recorded 72.645 and 73.176), which is the only check available for it.
+
+**This is a construction, not a derivation.** Two hand-picks at one size do not
+determine a law. Two other carrying rules — the same number of degrees above the
+band edge, or the same fraction of the band width — give angles within **0.36°**
+of these and are equally valid; nothing in the geometry prefers one over
+another. Both 1 × 5 picks fall outside the aligner's window, but so does its
+solved configuration: nothing above 1 × 4 is reachable by that search at all.
+
 `H_RH = 180 − H_LH` and `V_RH = −V_LH` hold **exactly** here, and not as a
 coincidence: RH's geometry is LH's reflected about x = 1232 — measured 0.0 px
 deviation, index for index in the horizontal group and in reverse order in the
