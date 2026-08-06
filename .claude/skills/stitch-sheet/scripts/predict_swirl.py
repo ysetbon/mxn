@@ -42,6 +42,27 @@ degrees, so it is the same computation on (n, m):
 
     V_LH(m, n) = H_LH(n, m) - 90        extensions unchanged
     H_RH       = 180 - H_LH             V_RH = -V_LH
+
+Two sizes fall outside step 3, and each has its own closed form:
+
+CASE A, 1 x 1. It has no k = -1 in range at all - a square allows k from -(m-1)
+to m - so what it gets is its single twist, k = +1. Being its own transpose its
+two groups must be identical, which pins it to the 45 degree diagonal, and there
+the gap is just the diagonal of the offset:
+
+    g = sqrt(2) (32 + E)    ->    E = g/sqrt(2) - 32     (7.605050814.. at 56.01)
+
+CASE C, n = 1 with m >= 2. A one-pair group has no middle equation to telescope
+from, so step 3 has nothing to pin. Solve the transposed group f(1, m) first,
+read its uncorrected corner margin straight off the layout, and turn whatever it
+falls short by into the extension - which makes the corner an INPUT rather than
+something checked afterwards:
+
+    M0 = 88 sin p + (32 + p_0) cos p           before any correction
+    E  = max(0, (M* - M0)/sin p)               M* is the corner floor wanted
+    t  solves  (56 - 112m) sin t - (120 + 2E) cos t = g,  quadrant II
+
+At M* = 16 every m = 2..8 lands on exactly +16.0000 px with both gaps on target.
 """
 import argparse
 import math
@@ -49,6 +70,7 @@ from fractions import Fraction
 
 MIN_GAP = 56.0
 DEFAULT_GAP = 56.01          # a hair off the floor, so float noise cannot fail it
+DEFAULT_CORNER = 16.0        # the floor the n = 1 boundary is solved to (case C)
 
 
 def layout(m, n):
@@ -134,25 +156,71 @@ def extensions(m, n, angle_deg, gap=DEFAULT_GAP):
     return e
 
 
-def predict(m, n, gap=DEFAULT_GAP):
-    """Both groups of an m x n swirl at k = -1, left hand, in one call."""
-    def one(mm, nn):
-        if nn == 1:                      # a 1-wide group is its transpose's job
-            return None
-        a = shared_angle(mm, nn, gap)
-        return a, extensions(mm, nn, a, gap)
+def _fold(a):
+    """An angle folded into (-180, 180] - the same direction, stated once."""
+    a %= 360.0
+    return a - 360.0 if a > 180.0 else a
 
-    h = one(m, n)
-    v = one(n, m)                        # the transpose, before rotating
+
+def one_by_one(gap=DEFAULT_GAP):
+    """Case A - the 45 degree diagonal, the only member with identical groups."""
+    return -135.0, 135.0, gap / math.sqrt(2.0) - 32.0
+
+
+def boundary(m, gap=DEFAULT_GAP, min_corner=DEFAULT_CORNER):
+    """Case C - the n = 1 column solved directly, to a chosen corner floor.
+
+    Returns (angle, extension) for the one-pair horizontal group of an m x 1.
+    """
+    if m < 2:
+        raise ValueError('case C needs m >= 2; 1 x 1 is case A')
+    phi = shared_angle(1, m, gap)
+    p0 = extensions(1, m, phi, gap)[0]
+    r = math.radians(phi)
+    m0 = 88.0 * math.sin(r) + (32.0 + p0) * math.cos(r)
+    e = max(0.0, (min_corner - m0) / math.sin(r))
+
+    a, b = 56.0 - 112.0 * m, -(120.0 + 2.0 * e)    # a sin t + b cos t = g
+    rho = math.hypot(a, b)
+    if rho < 1e-12 or abs(gap) > rho:
+        raise ValueError('no one-pair angle reaches this gap')
+    delta = math.atan2(b, a)
+    base = math.asin(gap / rho)
+    for root in (base, math.pi - base):
+        t = math.degrees(root - delta) % 360.0
+        if 90.0 < t < 180.0:
+            return t, e
+    raise ValueError('both roots fell outside the swirl quadrant')
+
+
+def predict(m, n, gap=DEFAULT_GAP, min_corner=DEFAULT_CORNER):
+    """Both groups of an m x n swirl at k = -1, left hand, in one call."""
     out = dict(m=m, n=n, gap=gap)
-    if h:
-        out['h_angle'], out['h_ext'] = h[0], h[1]
-    if v:
-        out['v_angle'], out['v_ext'] = v[0] - 90.0, v[1]
-    if not h and v:                      # n = 1: the whole answer is transposed
-        out['h_angle'], out['h_ext'] = v[0] - 90.0 + 90.0, None
-    out['h_angle_rh'] = 180.0 - out['h_angle'] if 'h_angle' in out else None
-    out['v_angle_rh'] = -out['v_angle'] if 'v_angle' in out else None
+
+    if m == 1 and n == 1:                        # case A
+        ha, va, e = one_by_one(gap)
+        out.update(case='A', h_angle=ha, h_ext=[e], v_angle=va, v_ext=[e])
+    elif n == 1:                                 # case C - the one-pair boundary
+        ha, e = boundary(m, gap, min_corner)
+        va = shared_angle(1, m, gap)
+        out.update(case='C', min_corner=min_corner,
+                   h_angle=ha, h_ext=[e],
+                   v_angle=va - 90.0, v_ext=extensions(1, m, va, gap))
+    else:                                        # case B, both groups
+        ha = shared_angle(m, n, gap)
+        out.update(case='B', h_angle=ha, h_ext=extensions(m, n, ha, gap))
+        if m == 1:                               # the vertical group is one pair
+            va, e = boundary(n, gap, min_corner)
+            out.update(v_angle=va - 90.0, v_ext=[e])
+        else:
+            va = shared_angle(n, m, gap)
+            out.update(v_angle=va - 90.0, v_ext=extensions(n, m, va, gap))
+
+    # a shared angle is a direction, defined mod 360; fold the mirrored values
+    # back into (-180, 180] so a consumer with a bounded angle axis - a slider, a
+    # scan - cannot clamp them into a different configuration.
+    out['h_angle_rh'] = _fold(180.0 - out['h_angle'])
+    out['v_angle_rh'] = _fold(-out['v_angle'])
     return out
 
 
@@ -161,10 +229,13 @@ def main():
     ap.add_argument('--m', type=int, required=True)
     ap.add_argument('--n', type=int, required=True)
     ap.add_argument('--gap', type=float, default=DEFAULT_GAP)
+    ap.add_argument('--min-corner', type=float, default=DEFAULT_CORNER,
+                    help='corner floor the n = 1 boundary is solved to (case C)')
     a = ap.parse_args()
 
-    p = predict(a.m, a.n, a.gap)
-    print('%d x %d  k = -1  LH   target gap %.3f px' % (a.m, a.n, a.gap))
+    p = predict(a.m, a.n, a.gap, a.min_corner)
+    print('%d x %d  k = %s  LH   target gap %.3f px   case %s'
+          % (a.m, a.n, '+1' if p['case'] == 'A' else '-1', a.gap, p['case']))
     if 'h_angle' in p:
         print('  horizontal  angle %10.4f deg   (RH %9.4f)' % (p['h_angle'], p['h_angle_rh']))
         if p.get('h_ext'):

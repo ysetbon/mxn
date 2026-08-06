@@ -367,6 +367,13 @@ LH   horizontal −135.000°   vertical +135.000°   pair extension 7.6051 both 
 RH   horizontal  −45.000°   vertical −135.000°   gap 56.010 px, corner +39.60
 ```
 
+At 45° the gap is just the diagonal of the offset, so the extension is one line
+of algebra rather than an inversion:
+
+```
+g = sqrt(2) * (32 + E)      E = g/sqrt(2) - 32 = 7.605050814... at g = 56.01
+```
+
 The least-extension tie-break instead returns −130.071° / 139.929° with
 extensions of 0.15 px — valid, cheaper in total extension, and lopsided, at
 +32.14. Least extension is not the same as most symmetric, and where a size is
@@ -398,11 +405,73 @@ past m = 4 that configuration is not merely tight but **negative**:
 | 7 × 1 | −9.74 | **+16.01** |
 | 8 × 1 | −12.00 | **+15.96** |
 
-2 × 1 and 3 × 1 need no correction — their 1 × m counterparts ship the closed
-form anyway, and they already agree to four decimals. This is the practical
-payoff of the symmetry: the m = 1 row, which is the only one that needed hand
-work, fills in the n = 1 column for free, and the check flags every size where
-the solver would otherwise have handed back the wrong member of the family.
+2 × 1 needs no correction — its 1 × 2 counterpart ships the closed form anyway,
+and they already agree to four decimals. This is the practical payoff of the
+symmetry: the m = 1 row, which is the only one that needed hand work, fills in
+the n = 1 column for free, and the check flags every size where the solver
+would otherwise have handed back the wrong member of the family.
+
+### Better: solve the n = 1 column directly, to a chosen corner floor
+
+Transposing works but it is a copy, not a derivation — the column only exists
+because the row was steered. There is a direct construction. Solve the
+transposed multi-pair group `f(1, m) = (φ, [p_0 … p_m-1])` first, read its
+uncorrected outside-corner margin straight off the layout, and turn the shortfall
+into the one-pair extension:
+
+```
+M0 = 88 sin φ + (32 + p_0) cos φ           the margin before any correction
+E  = max(0, (M* - M0) / sin φ)             M* is the corner floor you want
+theta solves   (56 - 112m) sin t - (120 + 2E) cos t = g,  quadrant II
+```
+
+`88 sin φ` is the fixed 88 px layout offset projected on the outside-line normal;
+`(32 + p_0) cos φ` is the outer arm's 32 px base offset plus its extension on the
+same normal, and φ sits in quadrant II so that term subtracts.
+
+Replayed against the generator's real n = 1 geometry at `g = 56.01`, `M* = 16`,
+every m = 2 … 8 comes out valid in both groups with the gaps on 56.010 and the
+corner on **+16.0000** — the floor is hit by construction, not approached:
+
+| m | φ | p_0 | E | θ |
+|---|---|---|---|---|
+| 2 | 129.961438 | 48.223834 |  0.098565 | 160.150085 |
+| 3 | 141.278896 | 29.922368 | 14.811738 | 162.042970 |
+| 4 | 146.674443 | 25.024884 | 27.850675 | 163.349048 |
+| 5 | 150.108612 | 22.813959 | 39.463030 | 164.394414 |
+| 6 | 152.572081 | 21.599761 | 50.016073 | 165.255592 |
+| 7 | 154.463015 | 20.859825 | 59.753983 | 165.980179 |
+| 8 | 155.979854 | 20.379560 | 68.841636 | 166.600664 |
+
+So the column is derivable after all, and the corner stops being something you
+check afterwards and becomes an input.
+
+### The whole thing is one piecewise function now
+
+Three cases cover every size, and `predict_swirl.py` implements all three:
+
+| case | when | what pins it |
+|---|---|---|
+| A | 1 × 1 | its own transpose, so the 45° diagonal; `E = g/√2 − 32` |
+| B | n ≥ 2 | the cone edge: the shallowest arm empties to zero |
+| C | n = 1, m ≥ 2 | the corner floor `M*`, solved for directly |
+
+Replayed against the generator's own geometry on all **64 sizes**, scored through
+the aligner's gap test and the corner measurement: every one valid, gaps on
+target to **6 × 10⁻¹³ px**, and **no corner below +16.0000 px anywhere**. Case A
+sits alone at +39.60, case B's interior runs +16.00 … +32.94, case C is +16.0000
+throughout.
+
+That retires the hand work. The m = 1 row was steered size by size and the n = 1
+column was transposed from it; both now come out of the formula at exactly the
+floor. The steered configurations are still shipped in the bench — they are
+equally valid members of the same family, chosen by eye — but nothing depends on
+them any more. Where they differ it is the member, not the geometry: 3 × 1 ships
+E = 15.1646 for +16.22 against case C's E = 14.811738 for +16.0000.
+
+Angles come back folded into (−180, 180]. The mirror law writes RH 1 × 1
+horizontal as 315°, the same direction as −45°, and a consumer with a bounded
+angle axis will clamp the former into a different configuration.
 
 ## Two exact symmetries — forecast instead of searching
 
