@@ -237,15 +237,24 @@ def corner_margins(group, group_eval, other_group, other_eval):
 
 
 def worst_corner(h_group, h_eval, v_group, v_eval):
-    """The tightest corner, or None without valid geometry.
+    """The tightest corner in either direction, or None without valid geometry.
 
-    Measured in one direction only: the HORIZONTAL group's outside pair against
-    the VERTICAL group's starting corners. The reverse is not a corner - at
-    m = 1 the vertical group is a single pair spanning one gap, so almost every
-    horizontal start lies far outside its band and the number means nothing.
+    A group only has an outside pair worth measuring against once it is a band
+    of more than one pair. At m = 1 the vertical group is a single pair spanning
+    one gap, so almost every horizontal start lies far outside it and the
+    reverse direction means nothing - it is skipped. From m = 2 the vertical
+    group is a real band and its own outside pair can cut across the horizontal
+    starts, so both directions count.
     """
-    rows = corner_margins(h_group, h_eval, v_group, v_eval)
-    return rows[0] if rows else None
+    rows = [dict(r, pair='horizontal outside pair')
+            for r in corner_margins(h_group, h_eval, v_group, v_eval)]
+    if len(pairs_of(len(v_group))) > 1:
+        rows += [dict(r, pair='vertical outside pair')
+                 for r in corner_margins(v_group, v_eval, h_group, h_eval)]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r['margin'])
+    return rows[0]
 
 
 # A corner is safe when the outside pair reaches it - margin 0 puts the outer

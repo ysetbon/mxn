@@ -166,10 +166,13 @@ invisible: every size past 1 × 6 looks unfixable and the ranking comes out
 backwards. This was got wrong twice before it was got right — first as an
 end-to-strand clearance, then against the block.
 
-Measured in one direction only: the horizontal outside pair against the vertical
-group's starts. The reverse is not a corner — at m = 1 the vertical group is a
-single pair spanning one gap, so nearly every horizontal start lies far outside
-its band and the number means nothing.
+A group is only a band worth measuring against once it has **more than one
+pair**. At m = 1 the vertical group is a single pair spanning one gap, so nearly
+every horizontal start lies far outside it and the reverse direction is
+meaningless — it is skipped there. From m = 2 the vertical group is a real band
+and its own outside pair can cut across the horizontal starts, so both
+directions count. Measuring only one way at m = 2 overstates 2 × 1 by 23 px
+(+42.64 against the true +19.06).
 
 ## The shipped set, m = 1, k = −1
 
@@ -206,6 +209,34 @@ with vertical extensions 29.82 / 35.2704 / 49.81 / 59.2815 / 68.59.
 A gap sitting exactly on the floor must not fail the band test on float noise —
 extensions stored to 4 dp land ~3 × 10⁻⁵ px under 56, so `BAND_TOL` is 10⁻³ px.
 Without it a perfectly good configuration reports `valid false`.
+
+## m = 2 — nothing to fix
+
+Every 2 × n at k = −1 solves at the gap floor with a clear corner, straight from
+the closed form. No hand-steering, no vertical extension to buy clearance, and
+every one inside the aligner's own angle window — the opposite of m = 1, where
+everything from 1 × 5 needed work.
+
+| n | H · LH | H · RH | V · LH | gap | corner |
+|---|---|---|---|---|---|
+| 1 | 160.177° | 19.823° | 51.063° | 56.010 | +19.06 |
+| 2 | 152.953° | 27.047° | 62.953° | 56.010 | +32.41 |
+| 3 | 155.377° | 24.623° | 71.510° | 56.010 | +28.03 |
+| 4 | 157.167° | 22.833° | 76.001° | 56.010 | +25.04 |
+| 5 | 158.557° | 21.443° | 78.741° | 56.010 | +22.61 |
+| 6 | 159.681° | 20.319° | 80.585° | 56.010 | +20.56 |
+| 7 | 160.618° | 19.382° | 81.911° | 56.010 | +18.82 |
+| 8 | 161.417° | 18.583° | 82.910° | 56.010 | +17.29 |
+
+The margin falls with n as it does at m = 1, but from a far higher start, and it
+is still +17.29 at 2 × 8 — comfortably past the ~16 px the m = 1 sizes were
+steered to. Extrapolating the −1.5 px per step, m = 2 would stay clear well past
+n = 8.
+
+2 × 1 is 1 × 2 transposed, exactly: `H_LH(2,1) = V_LH(1,2) + 90` gives 160.177
+and `V_LH(2,1) = H_LH(1,2) − 90` gives 51.063, both to four decimals, and the
+corner margin is the same +19.062 — as it must be, transposition being a rigid
+rotation.
 
 ## Two exact symmetries — forecast instead of searching
 
