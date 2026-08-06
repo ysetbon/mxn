@@ -137,6 +137,8 @@ asked to update an existing sheet, pass its `url`.
 - `scripts/solve_stitch.py` — same outputs, solved from the closed form instead
   of searched. Use it wherever `run_stitch.py` reports `fallback`
 - `scripts/alignment_model.py` — the gap test and its inverse, standalone
+- `scripts/predict_swirl.py` — a k = −1 swirl straight from m and n: no
+  generator, no probe, no search. `predict_swirl.py --m 13 --n 4`
 - `scripts/build_sheet.py` — results directory → artifact HTML
 - `scripts/render_strands.py` — JSON → SVG (paint order, palette, labels)
 - `assets/template.html` — page shell: CSS, layout, chart hover script

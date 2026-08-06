@@ -148,6 +148,87 @@ That table is the *best* member of each family by the aligner's ranking, but
 it is not the one to ship past 1 × 3 — the corner decides that, and the corner
 is not something the aligner measures at all.
 
+## Predicting a swirl outright, from m and n
+
+`scripts/predict_swirl.py` returns both groups' shared angles, the gap and every
+pair extension for any m × n at k = −1 without generating a pattern, probing any
+geometry or searching anything. Three steps.
+
+**1. The layout is a formula.** A horizontal group's 2n continuation starts sit
+at four x columns and a 112 px row pitch, all linear in m and n. With
+`P = 56m` and `y0 = 388 − 56n`, reading order `i = 0 … 2n−1`:
+
+```
+i = 0        (1204 + P, y0)                       dir ( 0, -1)
+i = 2j-1     (1228 - P, y0 + 144 + 112(j-1))      dir (-1,  0)    j = 1 .. n-1
+i = 2j       (1236 + P, y0 +  88 + 112(j-1))      dir ( 1,  0)    j = 1 .. n-1
+i = 2n-1     (1260 - P, y0 + 112n + 8)            dir ( 0,  1)
+```
+
+Checked against the generator's own output on all 63 sizes of the 8 × 8 grid:
+**0.0 px deviation.** Only the starts and directions are needed — a gap never
+involves the targets, since it is a difference of `W = x sin t − y cos t` taken
+at the extended starts.
+
+**2. The extensions follow from (t, g).** With `Q = 8 + 112m`, `R = 24 − 112m`:
+
+```
+both ends   g =  R s - 144 c - s e_1 - c e_0
+odd  gaps   g =  (Q + e_j + e_j+1) s +  56 c
+even gaps   g = -(Q + e_j + e_j+1) s - 168 c
+middle      the same, with (e_j + e_j+1) replaced by 2 e_p-1
+```
+
+which telescopes out from the middle pair. At m = 1 that is Q = 120, R = −88 —
+the form the 1 × n family was first solved with, now shown to be the m = 1 case
+of a general one.
+
+**3. One equation pins the angle.** The least-extension member of the family sits
+on the edge of the feasible cone — the angle where the shallowest arm empties to
+exactly zero. That arm is pair `min(2, n−1)` and its extension is an affine
+combination of `U` and `V`, so setting it to zero gives
+
+```
+K2 cos t + K3 sin t = K1
+```
+
+one linear equation in sine and cosine with an explicit solution. No bisection,
+no scan. The vertical group is the horizontal group of the transposed size turned
+90°, so it is the same computation on (n, m).
+
+Replayed through the gap test at all 56 sizes with n ≥ 2: every predicted
+configuration valid, gaps on target to **2 × 10⁻¹³ px**, smallest extension
+exactly 0.0000. Where it differs from the searched answer it is the *search*
+that is off — at n = 2 the solver's 0.1 px tie-break leaves the shallowest arm
+0.04–0.43 px inside the edge rather than on it.
+
+### Checked on a size outside the grid: 13 × 4
+
+Predicted from m = 13, n = 4 alone:
+
+```
+horizontal   175.6453 deg  (RH 4.3547)   ext 21.9075 9.0433 0.0000 4.5216
+vertical      78.9078 deg  (RH -78.9078)
+             ext 19.8789 120.7718 0.0000 109.7925 10.9793 98.8133 21.9585
+                  87.8340 32.9378 76.8548 43.9170 65.8755 54.8963
+gap          56.010 px, uniform
+```
+
+Then generated and solved for real:
+
+| | predicted | generator + solver | difference |
+|---|---|---|---|
+| horizontal angle | 175.6453° | 175.6460° | 0.0007° |
+| vertical angle | 78.9078° | 78.9080° | 0.0002° |
+| vertical extensions | 13 values | | 0.005 px worst |
+| horizontal extensions | 4 values | | 0.113 px worst |
+| gap | 56.010 | 56.010 | exact |
+
+The 0.113 px is the solver's residual, not the formula's: its 0.001° angle step
+leaves the shallowest arm at 0.113 px where the closed form puts it at 0.000.
+13 × 4 lands at a corner margin of **+11.0 px, outside** — clear, and where the
+grid says a long thin size should sit.
+
 ## The corners — which side the outside pair runs
 
 Not a strand-to-strand clearance. Every crossing between the horizontal and
