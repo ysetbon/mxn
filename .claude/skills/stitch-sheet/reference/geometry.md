@@ -210,33 +210,40 @@ A gap sitting exactly on the floor must not fail the band test on float noise �
 extensions stored to 4 dp land ~3 × 10⁻⁵ px under 56, so `BAND_TOL` is 10⁻³ px.
 Without it a perfectly good configuration reports `valid false`.
 
-## m = 2 — nothing to fix
+## m = 2, 3, 4 — nothing to fix
 
-Every 2 × n at k = −1 solves at the gap floor with a clear corner, straight from
-the closed form. No hand-steering, no vertical extension to buy clearance, and
-every one inside the aligner's own angle window — the opposite of m = 1, where
-everything from 1 × 5 needed work.
+Every size at m >= 2 solves at the gap floor with a clear corner, straight from
+the closed form. No hand-steering, no vertical extension bought to clear
+anything, and every one inside the aligner's own angle window — the opposite of
+m = 1, where everything from 1 × 5 needed work.
 
-| n | H · LH | H · RH | V · LH | gap | corner |
-|---|---|---|---|---|---|
-| 1 | 160.177° | 19.823° | 51.063° | 56.010 | +19.06 |
-| 2 | 152.953° | 27.047° | 62.953° | 56.010 | +32.41 |
-| 3 | 155.377° | 24.623° | 71.510° | 56.010 | +28.03 |
-| 4 | 157.167° | 22.833° | 76.001° | 56.010 | +25.04 |
-| 5 | 158.557° | 21.443° | 78.741° | 56.010 | +22.61 |
-| 6 | 159.681° | 20.319° | 80.585° | 56.010 | +20.56 |
-| 7 | 160.618° | 19.382° | 81.911° | 56.010 | +18.82 |
-| 8 | 161.417° | 18.583° | 82.910° | 56.010 | +17.29 |
+Corner margin, LH, k = −1 (px; positive is clear):
 
-The margin falls with n as it does at m = 1, but from a far higher start, and it
-is still +17.29 at 2 × 8 — comfortably past the ~16 px the m = 1 sizes were
-steered to. Extrapolating the −1.5 px per step, m = 2 would stay clear well past
-n = 8.
+| | n=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| **m=1** | — | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
+| **m=2** | +19.1 | **+32.4** | +28.0 | +25.0 | +22.6 | +20.6 | +18.8 | +17.3 |
+| **m=3** | **+6.8** | +28.0 | **+32.1** | +26.9 | +23.3 | +20.6 | +18.4 | +16.7 |
+| **m=4** | +16.2 | +25.0 | +26.9 | **+32.1** | +26.9 | +23.2 | +20.3 | +17.9 |
 
-2 × 1 is 1 × 2 transposed, exactly: `H_LH(2,1) = V_LH(1,2) + 90` gives 160.177
-and `V_LH(2,1) = H_LH(1,2) − 90` gives 51.063, both to four decimals, and the
-corner margin is the same +19.062 — as it must be, transposition being a rigid
-rotation.
+The table is **symmetric** — margin(m, n) = margin(n, m) throughout, which it
+must be, transposition being a rigid rotation. That is worth using: an m × 1
+column is the 1 × m row transposed, so whatever was settled for 1 × m carries
+over rather than being re-derived.
+
+It also catches an error. The closed form gives 4 × 1 a margin of only +0.73,
+because 4 × 1 is 1 × 4 transposed and 1 × 4's closed form is exactly the
+configuration that was hand-steered away from. Transposing the *shipped* 1 × 4
+instead — `H = V_LH(1,4) + 90 = 163.176°`, `V = H_LH(1,4) − 90 = 58.642°`,
+extensions swapped between the groups — restores it to +16.22. 2 × 1 and 3 × 1
+need no such correction: their 1 × m counterparts ship the closed form anyway,
+and they already match to four decimals.
+
+The roomiest sizes are the squares (+32.4, +32.1, +32.1 down the diagonal); the
+tightest anywhere in the grid is **1 × 3 / 3 × 1 at +6.8**, which is the one to
+watch if the geometry ever changes. The margin falls with n along each row, but
+at m >= 2 it starts high enough to stay clear across the whole range — still
++16.7 at the worst corner of the m = 3 row.
 
 ## Two exact symmetries — forecast instead of searching
 
