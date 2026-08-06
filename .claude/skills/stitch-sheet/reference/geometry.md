@@ -305,9 +305,9 @@ corner is measured exactly the same way:
 
 | | n=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
-| **m=1** | *+39.6* | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
+| **m=1** | *+39.6* | +19.1 | +16.2 | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
 | **m=2** | +19.1 | **+32.4** | +28.0 | +25.0 | +22.6 | +20.6 | +18.8 | +17.3 |
-| **m=3** | **+6.8** | +28.0 | **+32.1** | +26.9 | +23.3 | +20.6 | +18.4 | +16.7 |
+| **m=3** | +16.2 | +28.0 | **+32.1** | +26.9 | +23.3 | +20.6 | +18.4 | +16.7 |
 | **m=4** | +16.2 | +25.0 | +26.9 | **+32.1** | +26.9 | +23.2 | +20.3 | +17.9 |
 | **m=5** | +15.8 | +22.6 | +23.3 | +26.9 | **+32.3** | +27.3 | +23.5 | +20.6 |
 | **m=6** | +16.0 | +20.6 | +20.6 | +23.2 | +27.3 | **+32.5** | +27.8 | +24.2 |
@@ -326,9 +326,36 @@ Three things the completed grid shows that no partial sweep did:
   same rate whichever row you are on; the far corner 1 × 8 / 8 × 1 sits at +16.0
   and 8 × 2 at +17.3, no worse than mid-grid.
 
-The tightest anywhere is **1 × 3 and its transpose 3 × 1, at +6.77** — less than
-half of the next tightest. That is the one to watch if the geometry ever
-changes.
+The tightest anywhere is **1 × 5 and its transpose 5 × 1, at +15.76**. Nothing
+on the grid is under 10 px.
+
+1 × 3 used to hold that place, at +6.77 — less than half of the next tightest —
+and it was an artefact of how the row was solved rather than anything about the
+size. Every other member of the m = 1 row past 1 × 3 was steered by buying the
+vertical group an extension, and they all landed within a quarter of a pixel of
+each other:
+
+| n | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|
+| vertical extension | 29.8 | 35.3 | 49.8 | 59.3 | 68.6 |
+| margin | +16.22 | +15.76 | +15.95 | +16.01 | +15.96 |
+
+1 × 3 never got that treatment: its closed-form vertical extension is 0.0487 px,
+which is the least-extension member again, and the margin is linear in that
+extension at **0.626 px of clearance per px of extension**. So the fix needs
+nothing from the horizontal group — it keeps the closed form exactly, angle
+141.279° with extensions 29.922 / 39.3869 / 0.0003 — and only turns the vertical
+group off its zero-extension end:
+
+```
+1 × 3   LH   H 141.279°  V  71.920°   v ext 15.1646   gap 56.010   corner +16.22
+        RH   H  38.721°  V −71.920°
+3 × 1   LH   H 161.920°  V  51.279°   h ext 15.1646   (the transpose, exactly)
+        RH   H  18.080°  V −51.279°
+```
+
+That is level with 1 × 4 and above every other member of the row, and it lifts
+the whole grid's floor from +6.77 to +15.76.
 
 1 × 1 is worth stating outright, because it is the one size where the closed
 form's tie-break gives the wrong answer for a reason that generalises. Being its
