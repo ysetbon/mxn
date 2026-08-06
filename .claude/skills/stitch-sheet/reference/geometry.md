@@ -210,14 +210,14 @@ A gap sitting exactly on the floor must not fail the band test on float noise �
 extensions stored to 4 dp land ~3 × 10⁻⁵ px under 56, so `BAND_TOL` is 10⁻³ px.
 Without it a perfectly good configuration reports `valid false`.
 
-## m = 2 … 6 — the closed form is enough, except in the n = 1 column
+## The full 8 × 8 grid at k = −1
 
-Every size at m >= 2, n >= 2 solves at the gap floor with a clear corner
-straight from the closed form. No hand-steering, no vertical extension bought to
-clear anything, and every one inside the aligner's own angle window — the
-opposite of m = 1, where everything from 1 × 5 needed work.
+Every size solves at the gap floor with a clear corner. Away from the n = 1
+column the closed form is enough on its own — no hand-steering, no vertical
+extension bought to clear anything, and every one inside the aligner's own angle
+window. Only m = 1 and the n = 1 column needed work.
 
-Corner margin, LH, k = −1 (px; positive is clear):
+Corner margin, LH (px; positive is clear):
 
 | | n=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
@@ -227,10 +227,23 @@ Corner margin, LH, k = −1 (px; positive is clear):
 | **m=4** | +16.2 | +25.0 | +26.9 | **+32.1** | +26.9 | +23.2 | +20.3 | +17.9 |
 | **m=5** | +15.8 | +22.6 | +23.3 | +26.9 | **+32.3** | +27.3 | +23.5 | +20.6 |
 | **m=6** | +16.0 | +20.6 | +20.6 | +23.2 | +27.3 | **+32.5** | +27.8 | +24.2 |
+| **m=7** | +16.0 | +18.8 | +18.4 | +20.3 | +23.5 | +27.8 | **+32.7** | +28.4 |
+| **m=8** | +16.0 | +17.3 | +16.7 | +17.9 | +20.6 | +24.2 | +28.4 | **+33.0** |
 
-The table is **symmetric** — margin(m, n) = margin(n, m) throughout, checked to
-0.01 px across all 47 sizes, which it must be since transposition is a rigid
-rotation.
+Three things the completed grid shows that no partial sweep did:
+
+- **It is symmetric** — margin(m, n) = margin(n, m) for all 63 sizes, checked to
+  0.01 px. It has to be: transposition is a rigid rotation.
+- **The diagonal is the roomiest and rises with size**, +32.4 → +33.0. Square
+  stitches have the most corner clearance, and gain slightly as they grow.
+- **The margin depends on how far from square a size is, not on how big it is.**
+  Reading away from the diagonal in either direction it falls off at much the
+  same rate whichever row you are on; the far corner 1 × 8 / 8 × 1 sits at +16.0
+  and 8 × 2 at +17.3, no worse than mid-grid.
+
+The tightest anywhere is **1 × 3 and its transpose 3 × 1, at +6.77** — less than
+half of the next tightest. That is the one to watch if the geometry ever
+changes.
 
 ### The n = 1 column has to be transposed, not solved
 
@@ -242,22 +255,22 @@ V_LH(m, 1) = H_LH(1, m) - 90
 ```
 
 Left to itself the closed form gets that column wrong for m >= 4, because it
-returns the same configuration that was hand-steered away from at 1 × m:
+returns the same configuration that was hand-steered away from at 1 × m — and
+past m = 4 that configuration is not merely tight but **negative**:
 
 | | closed form | transposed from the shipped 1 × m |
 |---|---|---|
 | 4 × 1 | +0.73 | **+16.22** |
 | 5 × 1 | −3.64 | **+15.76** |
 | 6 × 1 | −7.02 | **+15.95** |
+| 7 × 1 | −9.74 | **+16.01** |
+| 8 × 1 | −12.00 | **+15.96** |
 
 2 × 1 and 3 × 1 need no correction — their 1 × m counterparts ship the closed
-form anyway, and they already agree to four decimals.
-
-The roomiest sizes are the squares (+32.4, +32.1, +32.1, +32.3, +32.5 down the
-diagonal, and *rising* slowly with m); the tightest anywhere is
-**1 × 3 / 3 × 1 at +6.8**, which is the one to watch if the geometry changes.
-Along each row the margin dips towards the far end but at m >= 2 never gets
-close to zero — the worst in the whole grid past the n = 1 column is +16.7.
+form anyway, and they already agree to four decimals. This is the practical
+payoff of the symmetry: the m = 1 row, which is the only one that needed hand
+work, fills in the n = 1 column for free, and the check flags every size where
+the solver would otherwise have handed back the wrong member of the family.
 
 ## Two exact symmetries — forecast instead of searching
 
