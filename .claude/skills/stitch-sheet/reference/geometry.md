@@ -305,7 +305,7 @@ corner is measured exactly the same way:
 
 | | n=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
-| **m=1** | *+32.1* | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
+| **m=1** | *+39.6* | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
 | **m=2** | +19.1 | **+32.4** | +28.0 | +25.0 | +22.6 | +20.6 | +18.8 | +17.3 |
 | **m=3** | **+6.8** | +28.0 | **+32.1** | +26.9 | +23.3 | +20.6 | +18.4 | +16.7 |
 | **m=4** | +16.2 | +25.0 | +26.9 | **+32.1** | +26.9 | +23.2 | +20.3 | +17.9 |
@@ -320,12 +320,7 @@ Three things the completed grid shows that no partial sweep did:
   checked to 0.01 px. It has to be: transposition is a rigid rotation.
 - **The diagonal is the roomiest and rises with size**, +32.4 → +33.0. Square
   stitches have the most corner clearance, and gain slightly as they grow. 1 × 1
-  at k = +1 sits right on that diagonal at +32.14, between 3 × 3 and 4 × 4 — the
-  trivial member of the family, one pair per group and one gap each, with both
-  pair extensions at 0.15 px, so its generated continuation is already all but
-  aligned. It agrees with the k = +1, m = 1 table above (−129.96° / 140.04° at
-  gap 56.005, extension 0) to a tenth of a degree; the difference is the gap
-  target and the tie-break, not the geometry.
+  at k = +1 tops the whole grid at **+39.60**, on the same diagonal.
 - **The margin depends on how far from square a size is, not on how big it is.**
   Reading away from the diagonal in either direction it falls off at much the
   same rate whichever row you are on; the far corner 1 × 8 / 8 × 1 sits at +16.0
@@ -334,6 +329,26 @@ Three things the completed grid shows that no partial sweep did:
 The tightest anywhere is **1 × 3 and its transpose 3 × 1, at +6.77** — less than
 half of the next tightest. That is the one to watch if the geometry ever
 changes.
+
+1 × 1 is worth stating outright, because it is the one size where the closed
+form's tie-break gives the wrong answer for a reason that generalises. Being its
+own transpose, its two groups must come out identical, and only one member of the
+family does that: the 45° diagonal.
+
+```
+LH   horizontal −135.000°   vertical +135.000°   pair extension 7.6051 both groups
+RH   horizontal  −45.000°   vertical −135.000°   gap 56.010 px, corner +39.60
+```
+
+The least-extension tie-break instead returns −130.071° / 139.929° with
+extensions of 0.15 px — valid, cheaper in total extension, and lopsided, at
++32.14. Least extension is not the same as most symmetric, and where a size is
+its own transpose the symmetric member is the one to take.
+
+Store angles folded into (−180, 180]. The mirror law gives RH 1 × 1 horizontal as
+180 − (−135) = 315°, which is the same direction as −45° but sits outside the
+axis any angle slider or scan covers, so a consumer that clamps to its own range
+silently shows a different configuration.
 
 ### The n = 1 column has to be transposed, not solved
 
