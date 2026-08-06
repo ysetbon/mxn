@@ -27,6 +27,8 @@ import math
 MIN_GAP = 56.0          # strand_width + 10
 MAX_GAP = 69.0          # strand_width * 1.5
 EXT_MAX = 200.0         # the search's own pair-extension ceiling
+BAND_TOL = 1e-3         # a gap sitting on the floor must not fail on float noise;
+                        # 4 dp extensions land within ~3e-5 px, well under anything visible
 
 
 def pairs_of(count):
@@ -116,7 +118,7 @@ def evaluate(group, exts, angle_deg):
     gaps = [abs(v) for v in signed]
     want = 1.0 if last >= 0 else -1.0
     dir_ok = all((v > 0) if want > 0 else (v < 0) for v in signed)
-    in_band = all(MIN_GAP <= v <= MAX_GAP for v in gaps)
+    in_band = all(MIN_GAP - BAND_TOL <= v <= MAX_GAP + BAND_TOL for v in gaps)
     ext_ok = all(-1e-6 <= e <= EXT_MAX + 1e-6 for e in exts)
     mean = sum(gaps) / len(gaps)
 
@@ -124,7 +126,7 @@ def evaluate(group, exts, angle_deg):
     if not dir_ok:
         reason = 'the strand order folds back on itself - the gaps change sign'
     elif not in_band:
-        bad = [v for v in gaps if v < MIN_GAP or v > MAX_GAP]
+        bad = [v for v in gaps if v < MIN_GAP - BAND_TOL or v > MAX_GAP + BAND_TOL]
         reason = '%d gap(s) outside %g-%g px' % (len(bad), MIN_GAP, MAX_GAP)
     elif not ext_ok:
         reason = 'an extension is outside 0-%g px' % EXT_MAX
@@ -204,25 +206,29 @@ def _perp_coord(x, y, angle_deg):
     return x * math.sin(t) - y * math.cos(t)
 
 
-def corner_margins(group, group_eval, other_group):
-    """Signed offset of each of `other_group`'s starting corners from `group`'s
-    outside pair, in px. Positive means the corner is outside the band, which is
-    what a corner-safe configuration wants; negative means the outside strand
-    cuts across inside the corner.
+def corner_margins(group, group_eval, other_group, other_eval):
+    """Signed offset of each of the opposite group's starting corners from
+    `group`'s outside pair, in px. Positive means the corner is outside the
+    band, which is what a corner-safe configuration wants; negative means the
+    outside strand cuts across inside the corner.
 
-    The corners are the opposite group's UNEXTENDED starts - the points on the
-    woven block its continuations leave from, which do not move when that group
-    is aligned.
+    The corner is the opposite group's EXTENDED start - where its continuation
+    actually begins once that group is aligned, not the fixed point on the woven
+    block. Extending a strand slides its start outwards along its own arm, which
+    carries the corner out with it, so the opposite group's extension is the
+    main lever on this margin. Measuring against the block instead makes the
+    lever invisible and ranks configurations backwards.
     """
-    if not group_eval.get('gaps'):
+    if not group_eval.get('gaps') or not other_eval.get('gaps'):
         return []
     angle = group_eval['angle']
     edges = [_perp_coord(group_eval['starts'][0][0], group_eval['starts'][0][1], angle),
              _perp_coord(group_eval['starts'][-1][0], group_eval['starts'][-1][1], angle)]
     lo, hi = min(edges), max(edges)
     rows = []
-    for s in other_group:
-        w = _perp_coord(s['start'][0], s['start'][1], angle)
+    for i, s in enumerate(other_group):
+        px, py = other_eval['starts'][i]
+        w = _perp_coord(px, py, angle)
         margin = (lo - w) if abs(w - lo) <= abs(w - hi) else (w - hi)
         rows.append(dict(corner=s['name'], margin=margin,
                          side='outside' if margin >= 0 else 'inside'))
@@ -238,7 +244,7 @@ def worst_corner(h_group, h_eval, v_group, v_eval):
     m = 1 the vertical group is a single pair spanning one gap, so almost every
     horizontal start lies far outside its band and the number means nothing.
     """
-    rows = corner_margins(h_group, h_eval, v_group)
+    rows = corner_margins(h_group, h_eval, v_group, v_eval)
     return rows[0] if rows else None
 
 

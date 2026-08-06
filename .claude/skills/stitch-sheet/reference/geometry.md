@@ -144,188 +144,68 @@ Gaps are uniform at 56.010 px, gap variance ~10⁻²⁶. `scripts/solve_stitch.p
 does this end to end in about half a second per size, against the ~4 min the
 combo search needs at 4 pairs.
 
-That table is the *best* member of each family, not the only one. Two recorded
-alternatives at 1 × 4, steered by hand and applied with `--h-angle/--h-ext`:
-
-| | H · LH | H · RH | V · LH | ext (H) | mean gap | var | spread | Σ ext | in window |
-|---|---|---|---|---|---|---|---|---|---|
-| solved | 146.675° | 33.325° | 80.819° | 25.02 67.12 0 33.56 | 56.010 | ~0 | 392.07 | 125.7 | yes |
-| picked 1 | 149.253° | 30.747° | 72.645° | 25.3 81.9 6.4 43.2 | 58.108 | 0.226 | 406.76 | 156.8 | **no** |
-| picked 2 | 148.642° | 31.358° | 73.176° | 20.80 73.79 6.76 40.27 | 56.539 | 9.5e-6 | 395.78 | 141.6 | yes |
-
-All three valid, all palindromic in their gaps. RH is the exact mirror in every
-case (`180 − H_LH`, `−V_LH`, extensions unchanged, gaps equal to 10⁻⁹ px).
-
-The pair is instructive about what each parameter buys. Picked 1 sits 2.6°
-above the solved angle, which widens the gap to 58.11 and — because its
-outermost pair is extended 25.3 px — swings the ±20° window down to
-108.57–148.57°, past its own angle. Picked 2 comes back 0.6° to 148.642° and
-evens the gaps out at 56.54: inside the window again, 15 px less total
-extension, 11 px tighter overall.
-
-So **the angle sets the gap; the extensions only decide how evenly that gap is
-shared.** Holding picked 1's 149.253° and moving two pairs about 1.5 px
-(81.9 → 82.9, 6.4 → 4.9) drops the variance from 0.226 to 2.7 × 10⁻⁴ at an
-unchanged 58.11 px mean. Choosing an angle by eye costs nothing in evenness —
-it is the gap size being chosen.
-
-(Picked 2's variance is 9.5 × 10⁻⁶ rather than ~0 only because its extensions
-are recorded to 2 dp; at full precision it is uniform. The gaps span
-56.535–56.543, i.e. 8 thousandths of a pixel.)
-
-### Carrying a pick to another size
-
-Read this way, each pick is **two lengths in px**: the gap it runs at, and how
-far the shallowest arm is lifted off zero. The solved configuration is the case
-where that lift is zero — which is exactly why it sits on the edge of the band
-and is the least-extension member. Carrying both lengths unchanged fixes the
-angle at any other size, because the lift rises monotonically from the band edge
-to a peak before falling back to zero at the far edge (a different arm empties
-at each end, so search the *rising* branch only). The vertical group is the same
-with its single extension in place of the lift.
-
-Carried from 1 × 4 to 1 × 5:
-
-| | H · LH | H · RH | V · LH | mean gap | spread | Σ ext |
-|---|---|---|---|---|---|---|
-| picked 1 | 153.031° | 26.969° | 76.225° | 58.110 | 522.99 | 260.0 |
-| picked 2 | 151.861° | 28.139° | 76.659° | 56.539 | 508.85 | 228.7 |
-
-Both uniform to 10⁻⁸ and valid. The construction reproduces 1 × 4's vertical
-angles to four decimals from the extension alone (72.6450 and 73.1759 against
-the recorded 72.645 and 73.176), which is the only check available for it.
-
-**This is a construction, not a derivation.** Two hand-picks at one size do not
-determine a law. Two other carrying rules — the same number of degrees above the
-band edge, or the same fraction of the band width — give angles within **0.36°**
-of these and are equally valid; nothing in the geometry prefers one over
-another. Both 1 × 5 picks fall outside the aligner's window, but so does its
-solved configuration: nothing above 1 × 4 is reachable by that search at all.
-
-`H_RH = 180 − H_LH` and `V_RH = −V_LH` hold **exactly** here, and not as a
-coincidence: RH's geometry is LH's reflected about x = 1232 — measured 0.0 px
-deviation, index for index in the horizontal group and in reverse order in the
-vertical — and a reflection takes t to 180 − t while leaving the extensions
-alone. Mirror RH rather than re-searching it (see the 2 × 2 disagreement below,
-which is exactly what re-searching costs you).
+That table is the *best* member of each family by the aligner's ranking, but
+it is not the one to ship past 1 × 3 — the corner decides that, and the corner
+is not something the aligner measures at all.
 
 ## The corners — which side the outside pair runs
 
 Not a strand-to-strand clearance. Every crossing between the horizontal and
 vertical groups is masked and intended, so how deeply one overlaps another says
-nothing about whether the stitch reads correctly. Measuring end-to-strand
-distance and calling the overlaps defects was wrong, and the "corner-safe"
-values derived that way were meaningless — they have been removed.
+nothing. What matters is **which side of the opposite group's start the outside
+pair runs**. Each group is a band of parallel lines whose edges are its outside
+pair, reading indices 0 and last; the margin is the signed offset of the
+opposite group's start from the nearer outer line, positive when outside.
 
-What matters at a corner is **which side of it the outside pair runs**. Each
-group is a band of parallel lines whose edges are its outside pair, reading
-indices 0 and last. The vertical continuations leave the woven block at fixed
-corners that do not move when either group is aligned. A configuration is
-corner-safe when the horizontal outside pair passes **outside** those corners
-rather than cutting across inside them, so the measurement is the signed offset
-of each corner from the nearer outer line, positive when outside.
+**The reference point is the opposite group's *extended* start** — where its
+continuation actually begins once it is aligned — not the fixed point on the
+woven block. Extending a strand slides its start outwards along its own arm and
+carries the corner out with it, so the opposite group's extension is the main
+lever on this margin. Measured against the block instead, that lever is
+invisible: every size past 1 × 6 looks unfixable and the ranking comes out
+backwards. This was got wrong twice before it was got right — first as an
+end-to-strand clearance, then against the block.
 
-Measured in that one direction only. The reverse is not a corner: at m = 1 the
-vertical group is a single pair spanning one gap, so nearly every horizontal
-start lies far outside its band and the number means nothing.
+Measured in one direction only: the horizontal outside pair against the vertical
+group's starts. The reverse is not a corner — at m = 1 the vertical group is a
+single pair spanning one gap, so nearly every horizontal start lies far outside
+its band and the number means nothing.
 
-| size | source | margin | corner |
-|---|---|---|---|
-| 1 × 4 | solved | **+0.700** | `1_4`, outside |
-| 1 × 4 | picked 1 | −4.256 | `1_4`, inside |
-| 1 × 4 | picked 2 | **+0.706** | `1_4`, outside |
-| 1 × 5 | solved | −3.666 | `1_4`, inside |
-| 1 × 5 | picked 1 | −9.689 | `1_4`, inside |
-| 1 × 5 | picked 2 | **−0.236** | `5_5`, inside |
+## The shipped set, m = 1, k = −1
 
-1 × 4's configurations clear by about 0.7 px. 1 × 5's do not, and the margin is
-what separates them — its picked 2 sits a quarter of a pixel inside, the outer
-line effectively passing through the corner, against 3.7 px for solved and
-9.7 px for picked 1.
+One configuration per size. 1 × 2 and 1 × 3 are the closed form's own answer and
+their corners already clear. From 1 × 4 the corner decides, and each was steered
+until the outside pair sits about 16 px outside — a vertical extension of
+30–70 px is what buys that.
 
-`solve_stitch.py` reports the margin on every run and notes when the outside
-pair cuts inside. `--min-corner N` searches both groups together for a margin of
-at least N, which it has to: the margin moves with all four free parameters and
-no per-group pass can see it.
+| n | H · LH | H · RH | V · LH | gap | V gap | corner | Σ ext (H) |
+|---|---|---|---|---|---|---|---|
+| 2 | 141.063° | 38.937° | 70.177° | 56.010 | 56.010 | +19.06 | 33.8 |
+| 3 | 141.279° | 38.721° | 77.378° | 56.010 | 56.010 | +6.77 | 69.3 |
+| 4 | 148.642° | 31.358° | 73.176° | 56.539 | 58.493 | +16.22 | 141.6 |
+| 5 | 153.034° | 26.966° | 75.882° | 56.010 | 61.850 | +15.76 | 240.2 |
+| 6 | 152.565° | 27.435° | 75.805° | 56.000 | 61.857 | +15.95 | 295.1 |
+| 7 | 154.641° | 25.359° | 76.487° | 56.000 | 61.850 | +16.01 | 406.8 |
+| 8 | 155.965° | 24.035° | 77.015° | 56.000 | 61.859 | +15.96 | 521.1 |
 
-### Where the margin comes from, and where it runs out
-
-Hold the gaps uniform at the 56 px floor and the margin rises steadily with the
-shared angle, so each size has exactly one angle where it crosses zero — the
-least-turned configuration whose outside pair clears its corner. That crossing
-is what the picked-2 rows aim at:
-
-| n | best margin | at | zero crossing | Σ ext there |
-|---|---|---|---|---|
-| 4 | **+7.237** | 155.582° | 146.674° | 125.70 |
-| 5 | **+3.847** | 157.660° | 153.258° | 243.57 |
-| 6 | **+1.233** | 159.260° | 158.006° | 424.04 |
-| 7 | **−0.864** | 160.545° | — none | — |
-| 8 | **−2.599** | 161.607° | — none | — |
-
-**1 × 6 is the last size that can be made corner-safe.** From 1 × 7 the peak
-itself is negative, so no configuration clears and the pick sits at the peak
-instead — as close as the geometry allows, 0.86 px and 2.60 px inside.
-
-Three things that do *not* rescue it, all checked:
-
-- **Widening the gap makes it worse, not better.** At 1 × 6 the best margin
-  falls +1.23 → −0.53 → −2.39 → −6.53 as the gap goes 56.01 → 56.5 → 57 → 58.
-  The floor is where the corner is happiest, which is convenient — it is also
-  where the spread is smallest.
-- **Dropping the uniform-gap constraint buys nothing.** The margin depends only
-  on the angle and the outermost pair's extension, and at every peak that
-  extension is already 0.00 — the bound it wants to be at. Nothing the other
-  pairs do can move it.
-- **Raising the 200 px extension ceiling changes nothing.** Lifting it to 400
-  and 1000 leaves all five peaks identical to 10⁻⁴ px; the peak is interior,
-  not clipped.
-
-### 1 × 7 and 1 × 8, picked 2 — at the peak, not clearing
+Gaps uniform to ~10⁻¹⁰, spreads at the minimum for their gap, RH the exact
+reflection of LH throughout. Extensions in
+`scripts/solve_stitch.py --h-angle/--h-ext` form; the horizontal extensions for
+1 × 4 … 1 × 8 are
 
 ```
-1 x 7  H · LH 160.5450°  H · RH  19.4550°  V · LH 80.0474°   margin -0.864
-       ext 0.0012 151.4994 55.2000 132.2395 74.4599 112.9796 93.7197
-1 x 8  H · LH 161.6070°  H · RH  18.3930°  V · LH 81.3374°   margin -2.599
-       ext 0.0006 167.5492 58.3708 149.3528 76.5672 131.1564 94.7636 112.9600
+4  20.80  73.79   6.76  40.27
+5  13.0371  97.1387  16.4454  70.2409  43.3432
+6  21.5644 109.3861   0.0305  82.0472  27.3694  54.7083
+7  20.0852 127.4489   1.4579 102.2507  26.6561  77.0525  51.8543
+8  20.3593 143.0584   0.0058 119.2163  23.8479  95.3742  47.6900  71.5321
 ```
 
-Gaps uniform at 56.010, spreads 728.13 and 840.15 — the minimum at each size.
-Vertical gap 61.850 in both, carried on the same 35.2704 px extension.
+with vertical extensions 29.82 / 35.2704 / 49.81 / 59.2815 / 68.59.
 
-### 1 × 6, picked 2
-
-```
-H · LH 158.0065°  ext 3.5418 127.7393 40.4697 105.9219 62.2871 84.1045
-V · LH  78.3165°  ext 35.2704
-gaps 56.010 uniform, spread 616.11, vertical gap 61.850, margin +0.0008 outside
-```
-
-RH mirrors exactly: `H 21.9935°`, `V −78.3165°`. The vertical is your 1 × 5
-vertical carried across on its own extension (35.2704 px at gap 61.850), a rule
-that reproduces the 1 × 5 angle to four decimals.
-
-### 1 × 5, picked 2
-
-The configuration that gets closest to the corner, arrived at by hand:
-
-```
-H · LH 153.034°  ext 13.0371  97.1387  16.4454  70.2409  43.3432   gaps 56.010 uniform
-V · LH  75.882°  ext 35.2704                                       gap  61.850
-```
-
-Spread 504.09 — the minimum, since spread is (2n−1)·g and g is at the floor.
-RH mirrors exactly: `H 26.966°`, `V −75.882°`, same extensions.
-
-### It is not m = 1 or k = −1 specific
-
-The model is just the gap arithmetic, so the same solver runs on any size and
-any k. Spot-checked against known answers: at 1 × 3, k = +1 it returns
-−146.679° with extensions 67.13 / 0.02 / 33.57, reproducing the k = +1 closed
-form's −146.68° and [67, 0, 34]. At k = −1 it improves sizes the sweep *did*
-solve — 2 × 2 goes from spread 172.03, variance 0.465 to spread 168.03,
-variance 10⁻²⁶ — and 3 × 3 and 2 × 3 also land on uniform 56.010 px gaps. Those
-four sizes are what has been checked; a full 8 × 8 re-sweep has not been run.
+A gap sitting exactly on the floor must not fail the band test on float noise —
+extensions stored to 4 dp land ~3 × 10⁻⁵ px under 56, so `BAND_TOL` is 10⁻³ px.
+Without it a perfectly good configuration reports `valid false`.
 
 ## Two exact symmetries — forecast instead of searching
 
