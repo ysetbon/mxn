@@ -298,11 +298,14 @@ column the closed form is enough on its own — no hand-steering, no vertical
 extension bought to clear anything, and every one inside the aligner's own angle
 window. Only m = 1 and the n = 1 column needed work.
 
-Corner margin, LH (px; positive is clear):
+Corner margin, LH (px; positive is clear). 1 × 1 is italicised because it is the
+one size with no k = −1 in range at all — a square allows k from −(m−1) to m, so
+1 × 1 allows only 0 and 1. The figure quoted is its single twist, k = +1, whose
+corner is measured exactly the same way:
 
 | | n=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|
-| **m=1** | — | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
+| **m=1** | *+32.1* | +19.1 | **+6.8** | +16.2 | +15.8 | +16.0 | +16.0 | +16.0 |
 | **m=2** | +19.1 | **+32.4** | +28.0 | +25.0 | +22.6 | +20.6 | +18.8 | +17.3 |
 | **m=3** | **+6.8** | +28.0 | **+32.1** | +26.9 | +23.3 | +20.6 | +18.4 | +16.7 |
 | **m=4** | +16.2 | +25.0 | +26.9 | **+32.1** | +26.9 | +23.2 | +20.3 | +17.9 |
@@ -313,10 +316,16 @@ Corner margin, LH (px; positive is clear):
 
 Three things the completed grid shows that no partial sweep did:
 
-- **It is symmetric** — margin(m, n) = margin(n, m) for all 63 sizes, checked to
-  0.01 px. It has to be: transposition is a rigid rotation.
+- **It is symmetric** — margin(m, n) = margin(n, m) for all 63 k = −1 sizes,
+  checked to 0.01 px. It has to be: transposition is a rigid rotation.
 - **The diagonal is the roomiest and rises with size**, +32.4 → +33.0. Square
-  stitches have the most corner clearance, and gain slightly as they grow.
+  stitches have the most corner clearance, and gain slightly as they grow. 1 × 1
+  at k = +1 sits right on that diagonal at +32.14, between 3 × 3 and 4 × 4 — the
+  trivial member of the family, one pair per group and one gap each, with both
+  pair extensions at 0.15 px, so its generated continuation is already all but
+  aligned. It agrees with the k = +1, m = 1 table above (−129.96° / 140.04° at
+  gap 56.005, extension 0) to a tenth of a degree; the difference is the gap
+  target and the tie-break, not the geometry.
 - **The margin depends on how far from square a size is, not on how big it is.**
   Reading away from the diagonal in either direction it falls off at much the
   same rate whichever row you are on; the far corner 1 × 8 / 8 × 1 sits at +16.0
