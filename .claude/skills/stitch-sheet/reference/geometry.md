@@ -255,17 +255,43 @@ shared angle, so each size has exactly one angle where it crosses zero — the
 least-turned configuration whose outside pair clears its corner. That crossing
 is what the picked-2 rows aim at:
 
-| n | crossing | margin there | Σ ext | best margin attainable at the floor |
+| n | best margin | at | zero crossing | Σ ext there |
 |---|---|---|---|---|
-| 4 | 146.674° | +0.699 | 125.70 | +7.237 (at 155.582°) |
-| 5 | 153.258° | +0.000 | 243.57 | +3.847 (at 157.660°) |
-| 6 | 158.006° | +0.000 | 424.04 | +1.233 (at 159.260°) |
-| 7 | — | — | — | **never clears at the floor** |
+| 4 | **+7.237** | 155.582° | 146.674° | 125.70 |
+| 5 | **+3.847** | 157.660° | 153.258° | 243.57 |
+| 6 | **+1.233** | 159.260° | 158.006° | 424.04 |
+| 7 | **−0.864** | 160.545° | — none | — |
+| 8 | **−2.599** | 161.607° | — none | — |
 
-The room runs out as n grows: the best margin available anywhere in the band
-falls +7.24 → +3.85 → +1.23, and by 1 × 7 no angle at the floor puts the
-outside pair outside the corner at all. Above that size the gap would have to
-come off the floor, which costs spread, or the corner has to be accepted inside.
+**1 × 6 is the last size that can be made corner-safe.** From 1 × 7 the peak
+itself is negative, so no configuration clears and the pick sits at the peak
+instead — as close as the geometry allows, 0.86 px and 2.60 px inside.
+
+Three things that do *not* rescue it, all checked:
+
+- **Widening the gap makes it worse, not better.** At 1 × 6 the best margin
+  falls +1.23 → −0.53 → −2.39 → −6.53 as the gap goes 56.01 → 56.5 → 57 → 58.
+  The floor is where the corner is happiest, which is convenient — it is also
+  where the spread is smallest.
+- **Dropping the uniform-gap constraint buys nothing.** The margin depends only
+  on the angle and the outermost pair's extension, and at every peak that
+  extension is already 0.00 — the bound it wants to be at. Nothing the other
+  pairs do can move it.
+- **Raising the 200 px extension ceiling changes nothing.** Lifting it to 400
+  and 1000 leaves all five peaks identical to 10⁻⁴ px; the peak is interior,
+  not clipped.
+
+### 1 × 7 and 1 × 8, picked 2 — at the peak, not clearing
+
+```
+1 x 7  H · LH 160.5450°  H · RH  19.4550°  V · LH 80.0474°   margin -0.864
+       ext 0.0012 151.4994 55.2000 132.2395 74.4599 112.9796 93.7197
+1 x 8  H · LH 161.6070°  H · RH  18.3930°  V · LH 81.3374°   margin -2.599
+       ext 0.0006 167.5492 58.3708 149.3528 76.5672 131.1564 94.7636 112.9600
+```
+
+Gaps uniform at 56.010, spreads 728.13 and 840.15 — the minimum at each size.
+Vertical gap 61.850 in both, carried on the same 35.2704 px extension.
 
 ### 1 × 6, picked 2
 
