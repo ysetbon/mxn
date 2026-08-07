@@ -50,6 +50,15 @@ class _BatchGroupPanel:
     def refresh_group_alignment(self):
         return None
 
+    def sync_from_canvas(self):
+        # apply_loaded_strands() calls this on every load in current
+        # OpenStrandStudio; headless rendering has no group panel to sync.
+        return None
+
+    def clear_all(self):
+        # load_strands() (the file-path variant) clears the panel before a load.
+        return None
+
 
 class _BatchGroupLayerManager:
     """Minimal group manager wrapper for batch rendering."""

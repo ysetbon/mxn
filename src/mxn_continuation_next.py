@@ -849,6 +849,11 @@ def main(argv=None):
     parser.add_argument("--pair-extension-step", type=int, default=10)
     parser.add_argument("--use-gpu", action="store_true")
     parser.add_argument("--out", default=None, help="output JSON path")
+    parser.add_argument("--png", default=None,
+                        help="also render a PNG, drawn exactly the way main.py draws "
+                             "(needs PyQt5 and a sibling openstrandstudio checkout)")
+    parser.add_argument("--scale", type=float, default=2.0, help="PNG pixels per canvas unit")
+    parser.add_argument("--transparent", action="store_true", help="transparent PNG background")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -877,6 +882,16 @@ def main(argv=None):
     with open(out, "w", encoding="utf-8") as handle:
         handle.write(json_text)
     print(f"\nSaved: {out}")
+
+    if args.png:
+        # Lazy import: the generator itself needs neither PyQt5 nor OpenStrandStudio.
+        from mxn_continuation_render import create_render_canvas, render_json_to_file
+
+        canvas, kind = create_render_canvas()
+        image = render_json_to_file(json_text, args.png, scale_factor=args.scale,
+                                    transparent=args.transparent, canvas=canvas)
+        print(f"Saved: {args.png} ({image.width()}x{image.height()}, "
+              f"{len(canvas.strands)} layers, {kind} canvas)")
     return 0
 
 
