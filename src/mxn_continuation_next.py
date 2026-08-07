@@ -100,6 +100,42 @@ TAIL_OFFSET = 42.0 + 42.0 / 3.0   # 56.0 - how far past the paired point a tail 
 RETRACT = 52.0                    # how far a tail is pulled back before its continuation welds on
 STRAND_WIDTH = 46
 
+# ---------------------------------------------------------------------------
+# Alignment search defaults
+#
+# These are the twist sheet's settings, taken from
+# `.claude/skills/stitch-sheet/scripts/run_stitch.py`, so a level here is
+# aligned exactly the way the published Twist Stitches reference aligns one.
+# `first_strand` is the one that matters: it drives the gaps down toward the
+# 56px floor the sheet identifies as the tightest legal twist, where
+# `avg_gaussian` settles wider. On 2x2 k=1 LH: 56.43/56.41 against 56.84/56.81.
+# ---------------------------------------------------------------------------
+ANGLE_MODE = "first_strand"
+ANGLE_STEP_DEGREES = 0.5
+MAX_EXTENSION = 100.0
+MAX_PAIR_EXTENSION = 200
+# Finest extension grid first; the search costs (ext_max/step + 1) ** pairs, so
+# coarsen only as far as the combo budget forces.
+EXT_STEPS = [10, 20, 25, 40, 50, 100]
+COMBO_BUDGET = 400_000
+
+
+def pick_extension_step(pairs, ext_max=MAX_PAIR_EXTENSION, budget=COMBO_BUDGET):
+    """
+    Finest extension-grid step whose combo count fits the budget — the twist
+    sheet's `--ext-step auto` rule, so wide stitches coarsen the same way there
+    and here.
+
+    Returns (step, combos).
+    """
+    pairs = max(pairs, 1)
+    for step in EXT_STEPS:
+        combos = (ext_max // step + 1) ** pairs
+        if combos <= budget:
+            return step, combos
+    step = EXT_STEPS[-1]
+    return step, (ext_max // step + 1) ** pairs
+
 
 # ---------------------------------------------------------------------------
 # Engine selection
@@ -568,10 +604,12 @@ def _copy_geometry(src, dst):
 
 
 def align_continuation_level(strands, m, n, k, direction, hand, level, level_info,
-                             angle_step_degrees=0.5, max_extension=100.0,
-                             strand_width=STRAND_WIDTH, max_pair_extension=200,
-                             pair_extension_step=10, use_gpu=False,
-                             angle_mode="avg_gaussian", verbose=True):
+                             angle_step_degrees=ANGLE_STEP_DEGREES,
+                             max_extension=MAX_EXTENSION,
+                             strand_width=STRAND_WIDTH,
+                             max_pair_extension=MAX_PAIR_EXTENSION,
+                             pair_extension_step=None, use_gpu=False,
+                             angle_mode=ANGLE_MODE, verbose=True):
     """
     Run the engine's parallel alignment on one continuation level.
 
@@ -580,14 +618,36 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     are copied back onto the real strands afterwards — both the new tails and
     any extension the search applied to the source tails.
 
+    Defaults are the twist sheet's (`run_stitch.py`), including its per-group
+    `--ext-step auto` rule: `pair_extension_step=None` picks the finest grid
+    each group's pair count can afford. Pass a number to pin the grid.
+
     Returns:
-        dict with the horizontal and vertical alignment results.
+        dict with the horizontal and vertical alignment results, plus the
+        search settings actually used.
     """
     engine = get_engine(hand)
     virtual_list, back_map = _build_virtual_view(strands, level_info, level)
 
+    # Group sizes come from the engine's own k-based sets, exactly as the twist
+    # sheet sizes its search.
+    _, h_order, _, v_order = engine._build_k_based_strand_sets(m, n, k, direction)
+    h_pairs = max((len(h_order) + 1) // 2, 1)
+    v_pairs = max((len(v_order) + 1) // 2, 1)
+
+    if pair_extension_step is None:
+        h_step, h_combos = pick_extension_step(h_pairs, max_pair_extension)
+        v_step, v_combos = pick_extension_step(v_pairs, max_pair_extension)
+    else:
+        h_step = v_step = int(pair_extension_step)
+        h_combos = (max_pair_extension // h_step + 1) ** h_pairs
+        v_combos = (max_pair_extension // v_step + 1) ** v_pairs
+
     if verbose:
         print(f"\n--- LEVEL {level} alignment (k={k}, {direction}, mode={angle_mode}) ---")
+        print(f"    search: ext 0-{max_pair_extension} | H step {h_step} "
+              f"({h_pairs} pairs, {h_combos:,} combos) | V step {v_step} "
+              f"({v_pairs} pairs, {v_combos:,} combos)")
 
     h_result = engine.align_horizontal_strands_parallel(
         virtual_list, n,
@@ -595,7 +655,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         max_extension=max_extension,
         strand_width=strand_width,
         max_pair_extension=max_pair_extension,
-        pair_extension_step=pair_extension_step,
+        pair_extension_step=h_step,
         m=m, k=k, direction=direction,
         use_gpu=use_gpu,
         angle_mode=angle_mode,
@@ -609,7 +669,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         max_extension=max_extension,
         strand_width=strand_width,
         max_pair_extension=max_pair_extension,
-        pair_extension_step=pair_extension_step,
+        pair_extension_step=v_step,
         k=k, direction=direction,
         use_gpu=use_gpu,
         angle_mode=angle_mode,
@@ -638,7 +698,16 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         print(f"  H: {_result_line(h_result)}")
         print(f"  V: {_result_line(v_result)}")
 
-    return {"horizontal": h_result, "vertical": v_result}
+    return {
+        "horizontal": h_result,
+        "vertical": v_result,
+        "search": {
+            "ext_max": max_pair_extension, "h_step": h_step, "v_step": v_step,
+            "h_pairs": h_pairs, "v_pairs": v_pairs,
+            "h_combos": h_combos, "v_combos": v_combos,
+            "angle_step": angle_step_degrees, "angle_mode": angle_mode,
+        },
+    }
 
 
 def _result_line(result):
@@ -723,10 +792,12 @@ def build_starting_stitch_json(m, n, hand, reference_strands=None):
 
 
 def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
-                              align=True, angle_mode="avg_gaussian",
-                              angle_step_degrees=0.5, max_extension=100.0,
-                              strand_width=STRAND_WIDTH, max_pair_extension=200,
-                              pair_extension_step=10, use_gpu=False,
+                              align=True, angle_mode=ANGLE_MODE,
+                              angle_step_degrees=ANGLE_STEP_DEGREES,
+                              max_extension=MAX_EXTENSION,
+                              strand_width=STRAND_WIDTH,
+                              max_pair_extension=MAX_PAIR_EXTENSION,
+                              pair_extension_step=None, use_gpu=False,
                               retract=RETRACT, tail_offset=TAIL_OFFSET,
                               collect_stages=False, verbose=True):
     """
@@ -912,10 +983,12 @@ def main(argv=None):
     parser.add_argument("--direction", choices=["cw", "ccw"], default=None,
                         help="default: cw for lh, ccw for rh (the paired convention)")
     parser.add_argument("--no-align", action="store_true", help="skip parallel alignment")
-    parser.add_argument("--angle-mode", default="avg_gaussian",
+    parser.add_argument("--angle-mode", default=ANGLE_MODE,
                         choices=["first_strand", "avg_gaussian", "gaussian", "uniform"])
-    parser.add_argument("--max-pair-extension", type=int, default=200)
-    parser.add_argument("--pair-extension-step", type=int, default=10)
+    parser.add_argument("--max-pair-extension", type=int, default=MAX_PAIR_EXTENSION)
+    parser.add_argument("--pair-extension-step", type=int, default=None,
+                        help="pin the extension grid; default is the twist sheet's "
+                             "auto rule (finest step each group's pair count affords)")
     parser.add_argument("--use-gpu", action="store_true")
     parser.add_argument("--out", default=None, help="output JSON path")
     parser.add_argument("--png", default=None,
