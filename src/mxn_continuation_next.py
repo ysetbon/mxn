@@ -118,6 +118,10 @@ MAX_PAIR_EXTENSION = 200
 # coarsen only as far as the combo budget forces.
 EXT_STEPS = [10, 20, 25, 40, 50, 100]
 COMBO_BUDGET = 400_000
+# Every ring past the first sits further out, so its arms need to reach further
+# than the sheet's 200px ceiling. Levels >= 2 grow the ceiling while the winning
+# combo is pinned against it, up to this cap.
+EXTENSION_CEILING_CAP = 700
 
 
 def pick_extension_step(pairs, ext_max=MAX_PAIR_EXTENSION, budget=COMBO_BUDGET):
@@ -603,13 +607,89 @@ def _copy_geometry(src, dst):
         dst["control_point_center"] = copy.deepcopy(src["control_point_center"])
 
 
+def _is_pinned(result, ceiling):
+    """True when the winning combo sits on the edge of the extension grid."""
+    extensions = result.get("pair_extensions") or ()
+    if not extensions:
+        return False
+    return max(extensions) >= ceiling
+
+
+def _extension_ceilings(base, cap=EXTENSION_CEILING_CAP, growth=1.5, tries=4):
+    """Ceiling schedule: the base, then 1.5x each time, stopping at the cap."""
+    ceilings = []
+    ceiling = int(base)
+    for _ in range(max(tries, 1)):
+        ceilings.append(ceiling)
+        if ceiling >= cap:
+            break
+        ceiling = min(int(round(ceiling * growth / 10.0)) * 10, cap)
+    return ceilings
+
+
+def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label):
+    """
+    Run one group's alignment, growing the extension ceiling while the winner
+    is pinned against it.
+
+    A pinned winner means the search wanted longer arms than the grid allowed,
+    so its "best" is an artefact of the bound, not an optimum. Growing until the
+    optimum is interior fixes that. We stop at the FIRST interior result rather
+    than continuing to grow, because an over-wide grid lets a degenerate
+    long-armed solution win the variance tie-break (measured on 2x2 k1=1 k2=1:
+    a 900px ceiling picks 880/870px arms with a worse gap than the 300px
+    ceiling's 290px arms).
+
+    Returns (result, settings).
+    """
+    ceilings = _extension_ceilings(base_ceiling) if escalate else [int(base_ceiling)]
+
+    best = None
+    best_settings = None
+    for attempt, ceiling in enumerate(ceilings):
+        if fixed_step is None:
+            step, combos = pick_extension_step(pairs, ceiling)
+        else:
+            step = int(fixed_step)
+            combos = (ceiling // step + 1) ** pairs
+
+        result = run(ceiling, step)
+        settings = {"ceiling": ceiling, "step": step, "pairs": pairs,
+                    "combos": combos, "attempts": attempt + 1}
+
+        usable = result.get("success") or result.get("is_fallback")
+        if best is None or (usable and not (best.get("success") or best.get("is_fallback"))):
+            best, best_settings = result, settings
+
+        if not usable:
+            if verbose:
+                print(f"    {label}: ceiling {ceiling} -> no solution, growing")
+            continue
+
+        pinned = _is_pinned(result, ceiling)
+        if usable and (result.get("success") or not best.get("success")):
+            best, best_settings = result, settings
+        if not pinned:
+            if verbose and attempt:
+                print(f"    {label}: ceiling {ceiling} -> interior optimum "
+                      f"{result.get('pair_extensions')}, accepted")
+            break
+        if verbose:
+            print(f"    {label}: ceiling {ceiling} -> pinned at "
+                  f"{result.get('pair_extensions')}, growing")
+
+    best_settings["pinned"] = _is_pinned(best, best_settings["ceiling"])
+    return best, best_settings
+
+
 def align_continuation_level(strands, m, n, k, direction, hand, level, level_info,
                              angle_step_degrees=ANGLE_STEP_DEGREES,
                              max_extension=MAX_EXTENSION,
                              strand_width=STRAND_WIDTH,
                              max_pair_extension=MAX_PAIR_EXTENSION,
                              pair_extension_step=None, use_gpu=False,
-                             angle_mode=ANGLE_MODE, verbose=True):
+                             angle_mode=ANGLE_MODE, escalate_extension=None,
+                             verbose=True):
     """
     Run the engine's parallel alignment on one continuation level.
 
@@ -622,6 +702,12 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     `--ext-step auto` rule: `pair_extension_step=None` picks the finest grid
     each group's pair count can afford. Pass a number to pin the grid.
 
+    `escalate_extension` grows the extension ceiling while the winning combo is
+    pinned against it (see `_search_group`). It defaults to ON for level >= 2
+    and OFF for level 1: every ring past the first sits further out and needs
+    longer arms than the sheet's 200px ceiling allows, while level 1 must keep
+    reproducing the published twist exactly. Pass True/False to force it.
+
     Returns:
         dict with the horizontal and vertical alignment results, plus the
         search settings actually used.
@@ -629,51 +715,52 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     engine = get_engine(hand)
     virtual_list, back_map = _build_virtual_view(strands, level_info, level)
 
+    if escalate_extension is None:
+        escalate_extension = level >= 2
+
     # Group sizes come from the engine's own k-based sets, exactly as the twist
     # sheet sizes its search.
     _, h_order, _, v_order = engine._build_k_based_strand_sets(m, n, k, direction)
     h_pairs = max((len(h_order) + 1) // 2, 1)
     v_pairs = max((len(v_order) + 1) // 2, 1)
 
-    if pair_extension_step is None:
-        h_step, h_combos = pick_extension_step(h_pairs, max_pair_extension)
-        v_step, v_combos = pick_extension_step(v_pairs, max_pair_extension)
-    else:
-        h_step = v_step = int(pair_extension_step)
-        h_combos = (max_pair_extension // h_step + 1) ** h_pairs
-        v_combos = (max_pair_extension // v_step + 1) ** v_pairs
-
     if verbose:
-        print(f"\n--- LEVEL {level} alignment (k={k}, {direction}, mode={angle_mode}) ---")
-        print(f"    search: ext 0-{max_pair_extension} | H step {h_step} "
-              f"({h_pairs} pairs, {h_combos:,} combos) | V step {v_step} "
-              f"({v_pairs} pairs, {v_combos:,} combos)")
+        print(f"\n--- LEVEL {level} alignment (k={k}, {direction}, mode={angle_mode}, "
+              f"escalate={escalate_extension}) ---")
 
-    h_result = engine.align_horizontal_strands_parallel(
-        virtual_list, n,
-        angle_step_degrees=angle_step_degrees,
-        max_extension=max_extension,
-        strand_width=strand_width,
-        max_pair_extension=max_pair_extension,
-        pair_extension_step=h_step,
-        m=m, k=k, direction=direction,
-        use_gpu=use_gpu,
-        angle_mode=angle_mode,
-    )
+    h_result, h_settings = _search_group(
+        lambda ceiling, step: engine.align_horizontal_strands_parallel(
+            virtual_list, n,
+            angle_step_degrees=angle_step_degrees,
+            max_extension=max_extension,
+            strand_width=strand_width,
+            max_pair_extension=ceiling,
+            pair_extension_step=step,
+            m=m, k=k, direction=direction,
+            use_gpu=use_gpu,
+            angle_mode=angle_mode,
+        ),
+        h_pairs, max_pair_extension, pair_extension_step,
+        escalate_extension, verbose, "H")
+
     if h_result.get("success") or h_result.get("is_fallback"):
         virtual_list = engine.apply_parallel_alignment(virtual_list, h_result)
 
-    v_result = engine.align_vertical_strands_parallel(
-        virtual_list, n, m,
-        angle_step_degrees=angle_step_degrees,
-        max_extension=max_extension,
-        strand_width=strand_width,
-        max_pair_extension=max_pair_extension,
-        pair_extension_step=v_step,
-        k=k, direction=direction,
-        use_gpu=use_gpu,
-        angle_mode=angle_mode,
-    )
+    v_result, v_settings = _search_group(
+        lambda ceiling, step: engine.align_vertical_strands_parallel(
+            virtual_list, n, m,
+            angle_step_degrees=angle_step_degrees,
+            max_extension=max_extension,
+            strand_width=strand_width,
+            max_pair_extension=ceiling,
+            pair_extension_step=step,
+            k=k, direction=direction,
+            use_gpu=use_gpu,
+            angle_mode=angle_mode,
+        ),
+        v_pairs, max_pair_extension, pair_extension_step,
+        escalate_extension, verbose, "V")
+
     if v_result.get("success") or v_result.get("is_fallback"):
         virtual_list = engine.apply_parallel_alignment(virtual_list, v_result)
 
@@ -702,10 +789,11 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         "horizontal": h_result,
         "vertical": v_result,
         "search": {
-            "ext_max": max_pair_extension, "h_step": h_step, "v_step": v_step,
-            "h_pairs": h_pairs, "v_pairs": v_pairs,
-            "h_combos": h_combos, "v_combos": v_combos,
-            "angle_step": angle_step_degrees, "angle_mode": angle_mode,
+            "angle_step": angle_step_degrees,
+            "angle_mode": angle_mode,
+            "escalated": escalate_extension,
+            "horizontal": h_settings,
+            "vertical": v_settings,
         },
     }
 
@@ -798,6 +886,7 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
                               strand_width=STRAND_WIDTH,
                               max_pair_extension=MAX_PAIR_EXTENSION,
                               pair_extension_step=None, use_gpu=False,
+                              escalate_extension=None,
                               retract=RETRACT, tail_offset=TAIL_OFFSET,
                               collect_stages=False, verbose=True):
     """
@@ -873,7 +962,8 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
             angle_step_degrees=angle_step_degrees, max_extension=max_extension,
             strand_width=strand_width, max_pair_extension=max_pair_extension,
             pair_extension_step=pair_extension_step, use_gpu=use_gpu,
-            angle_mode=angle_mode, verbose=verbose,
+            angle_mode=angle_mode, escalate_extension=escalate_extension,
+            verbose=verbose,
         )
         level_entry["alignment"] = {
             "horizontal": _result_line(results["horizontal"]),
@@ -913,7 +1003,8 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
                 angle_step_degrees=angle_step_degrees, max_extension=max_extension,
                 strand_width=strand_width, max_pair_extension=max_pair_extension,
                 pair_extension_step=pair_extension_step, use_gpu=use_gpu,
-                angle_mode=angle_mode, verbose=verbose,
+                angle_mode=angle_mode, escalate_extension=escalate_extension,
+                verbose=verbose,
             )
             entry["alignment"] = {
                 "horizontal": _result_line(results["horizontal"]),
@@ -990,6 +1081,10 @@ def main(argv=None):
                         help="pin the extension grid; default is the twist sheet's "
                              "auto rule (finest step each group's pair count affords)")
     parser.add_argument("--use-gpu", action="store_true")
+    parser.add_argument("--no-escalate", action="store_true",
+                        help="never grow the extension ceiling, even on levels >= 2")
+    parser.add_argument("--escalate-level-1", action="store_true",
+                        help="also grow it on level 1 (breaks twist-sheet parity)")
     parser.add_argument("--out", default=None, help="output JSON path")
     parser.add_argument("--png", default=None,
                         help="also render a PNG, drawn exactly the way main.py draws "
@@ -1011,6 +1106,8 @@ def main(argv=None):
         max_pair_extension=args.max_pair_extension,
         pair_extension_step=args.pair_extension_step,
         use_gpu=args.use_gpu, collect_stages=bool(args.sequence_dir),
+        escalate_extension=(False if args.no_escalate
+                            else (True if args.escalate_level_1 else None)),
         verbose=not args.quiet,
     )
 
