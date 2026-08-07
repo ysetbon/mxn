@@ -682,13 +682,53 @@ def _history_json(strands):
     return json.dumps(history, indent=2)
 
 
+def _snapshot_json(strands):
+    """Deep-copy the current strand list into a self-contained, re-indexed document."""
+    snapshot = copy.deepcopy(strands)
+    for idx, strand in enumerate(snapshot):
+        strand["index"] = idx
+    return _history_json(snapshot)
+
+
+def build_starting_stitch_json(m, n, hand, reference_strands=None):
+    """
+    The starting stitch on its own — `_1`/`_2`/`_3` plus their `_2 x _3` masks,
+    with full-length tails (no continuation welded on yet).
+
+    This is the stretch generator's own output, which is the same base geometry
+    the continuation generators build on. `reference_strands` recolours it to
+    match another run's per-set colours, so a stage sequence keeps one palette
+    (set colours above set 2 are randomised on every generate call).
+    """
+    if hand == "lh":
+        import mxn_lh_strech as stretch
+    else:
+        import mxn_rh_stretch as stretch
+
+    data = json.loads(stretch.generate_json(m, n))
+    strands = _get_active_strands(data)
+
+    if reference_strands:
+        colors = {}
+        for strand in reference_strands:
+            colors.setdefault(strand["set_number"], strand.get("color"))
+        for strand in strands:
+            color = colors.get(strand["set_number"])
+            if color:
+                strand["color"] = copy.deepcopy(color)
+
+    for idx, strand in enumerate(strands):
+        strand["index"] = idx
+    return _history_json(strands)
+
+
 def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
                               align=True, angle_mode="avg_gaussian",
                               angle_step_degrees=0.5, max_extension=100.0,
                               strand_width=STRAND_WIDTH, max_pair_extension=200,
                               pair_extension_step=10, use_gpu=False,
                               retract=RETRACT, tail_offset=TAIL_OFFSET,
-                              verbose=True):
+                              collect_stages=False, verbose=True):
     """
     Build a starting stitch and grow one continuation level per entry in `ks`,
     aligning each level before the next one is welded on.
@@ -702,6 +742,10 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
         direction:  "cw" or "ccw".
         align:      run the parallel alignment after each level (recommended —
                     level L+1 is derived from level L's ALIGNED geometry).
+        collect_stages: also return one JSON snapshot per stage in
+                    `report["stages"]` — the starting stitch, then the pattern
+                    after each level is welded on and aligned. Every snapshot
+                    comes from this one run, so the per-set colours match.
 
     Returns:
         (json_text, report) — report lists per-level ordering and alignment.
@@ -721,6 +765,15 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
         "m": m, "n": n, "hand": hand, "direction": direction, "ks": ks,
         "levels": [],
     }
+
+    stages = [] if collect_stages else None
+    if stages is not None:
+        stages.append({
+            "level": 0,
+            "k": None,
+            "label": "starting stitch (_1/_2/_3)",
+            "json": build_starting_stitch_json(m, n, hand, reference_strands=strands),
+        })
 
     ident_real_to_virtual, ident_virtual_to_real = _identity_relabel(hand, m, n)
     level1_info = {
@@ -756,6 +809,13 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
             "vertical": _result_line(results["vertical"]),
         }
     report["levels"].append(level_entry)
+    if stages is not None:
+        stages.append({
+            "level": 1,
+            "k": ks[0],
+            "label": f"+ _4/_5 at k={ks[0]}" + (" (aligned)" if align else ""),
+            "json": _snapshot_json(strands),
+        })
 
     # ---- levels 2..N: the generic machinery -------------------------------
     for idx, k in enumerate(ks[1:], start=2):
@@ -789,11 +849,20 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
                 "vertical": _result_line(results["vertical"]),
             }
         report["levels"].append(entry)
+        if stages is not None:
+            stages.append({
+                "level": idx,
+                "k": k,
+                "label": f"+ _{dst_a}/_{dst_b} at k={k}" + (" (aligned)" if align else ""),
+                "json": _snapshot_json(strands),
+            })
 
     for idx, strand in enumerate(strands):
         strand["index"] = idx
 
     report["total_strands"] = len(strands)
+    if stages is not None:
+        report["stages"] = stages
     return _history_json(strands), report
 
 
@@ -852,6 +921,10 @@ def main(argv=None):
     parser.add_argument("--png", default=None,
                         help="also render a PNG, drawn exactly the way main.py draws "
                              "(needs PyQt5 and a sibling openstrandstudio checkout)")
+    parser.add_argument("--sequence-dir", default=None,
+                        help="render one frame per stage into this directory: the "
+                             "starting stitch, then the pattern after each level, all "
+                             "on shared bounds so the frames line up")
     parser.add_argument("--scale", type=float, default=2.0, help="PNG pixels per canvas unit")
     parser.add_argument("--transparent", action="store_true", help="transparent PNG background")
     parser.add_argument("--quiet", action="store_true")
@@ -864,7 +937,8 @@ def main(argv=None):
         align=not args.no_align, angle_mode=args.angle_mode,
         max_pair_extension=args.max_pair_extension,
         pair_extension_step=args.pair_extension_step,
-        use_gpu=args.use_gpu, verbose=not args.quiet,
+        use_gpu=args.use_gpu, collect_stages=bool(args.sequence_dir),
+        verbose=not args.quiet,
     )
 
     _print_report(report)
@@ -883,15 +957,27 @@ def main(argv=None):
         handle.write(json_text)
     print(f"\nSaved: {out}")
 
-    if args.png:
+    if args.png or args.sequence_dir:
         # Lazy import: the generator itself needs neither PyQt5 nor OpenStrandStudio.
-        from mxn_continuation_render import create_render_canvas, render_json_to_file
+        from mxn_continuation_render import (
+            create_render_canvas, render_json_to_file, render_sequence,
+        )
 
         canvas, kind = create_render_canvas()
-        image = render_json_to_file(json_text, args.png, scale_factor=args.scale,
-                                    transparent=args.transparent, canvas=canvas)
-        print(f"Saved: {args.png} ({image.width()}x{image.height()}, "
-              f"{len(canvas.strands)} layers, {kind} canvas)")
+
+        if args.png:
+            image = render_json_to_file(json_text, args.png, scale_factor=args.scale,
+                                        transparent=args.transparent, canvas=canvas)
+            print(f"Saved: {args.png} ({image.width()}x{image.height()}, "
+                  f"{len(canvas.strands)} layers, {kind} canvas)")
+
+        if args.sequence_dir:
+            frames = render_sequence(report["stages"], args.sequence_dir,
+                                     scale_factor=args.scale,
+                                     transparent=args.transparent, canvas=canvas)
+            print(f"\nSequence ({kind} canvas, shared bounds):")
+            for path, label in frames:
+                print(f"  {path}  -  {label}")
     return 0
 
 

@@ -368,6 +368,52 @@ def render_json_to_file(json_content, out_path, scale_factor=2.0, transparent=Fa
     return image
 
 
+def render_sequence(stages, out_dir, prefix="step", scale_factor=2.0, transparent=False,
+                    canvas=None, padding=BOUNDS_PADDING):
+    """
+    Render a stage sequence — the starting stitch, then the pattern after each
+    continuation level — as a set of frames that line up.
+
+    Every frame is drawn with the SAME bounds (the union across all stages), so
+    the stitch keeps one position and scale and the frames read as a progression
+    instead of each one being re-cropped to its own content.
+
+    Args:
+        stages:  `report["stages"]` from `generate_multi_level_json(..., collect_stages=True)`,
+                 i.e. dicts with "level", "k", "label", "json".
+        out_dir: directory to write into (created if missing).
+        prefix:  filename prefix; frames are `<prefix>0_...png`, `<prefix>1_...png`, ...
+
+    Returns:
+        list of (path, label) in frame order.
+    """
+    if not stages:
+        raise ValueError("no stages to render")
+
+    if canvas is None:
+        canvas, _ = create_render_canvas()
+
+    # Pass 1: union of every stage's bounds, so all frames share one viewport.
+    union = None
+    for stage in stages:
+        load_json_into_canvas(stage["json"], canvas)
+        bounds = calculate_strands_bounds(canvas, padding)
+        union = bounds if union is None else union.united(bounds)
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    written = []
+    for index, stage in enumerate(stages):
+        load_json_into_canvas(stage["json"], canvas)
+        image = render_canvas_image(canvas, union, scale_factor, transparent)
+        suffix = "base" if stage.get("level") == 0 else f"k{stage.get('k')}"
+        path = os.path.join(out_dir, f"{prefix}{index}_{suffix}.png")
+        if not image.save(path):
+            raise IOError(f"failed to write {path}")
+        written.append((path, stage.get("label", "")))
+    return written
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Render a pattern JSON exactly the way main.py draws it.")
