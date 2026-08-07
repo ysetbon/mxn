@@ -121,7 +121,13 @@ COMBO_BUDGET = 400_000
 # Every ring past the first sits further out, so its arms need to reach further
 # than the sheet's 200px ceiling. Levels >= 2 grow the ceiling while the winning
 # combo is pinned against it, up to this cap.
-EXTENSION_CEILING_CAP = 700
+#
+# 1200 rather than something smaller because 2x2 LH k1=2 k2=1 is still in
+# fallback (gap 806px) at 450 and still pinned at 680; it only reaches a real
+# solution near 1000 (gap 56.42, variance 0.004). Raising the cap costs nothing
+# on easier stitches, which stop at the first interior optimum and never see it.
+EXTENSION_CEILING_CAP = 1200
+EXTENSION_CEILING_TRIES = 6
 
 
 def pick_extension_step(pairs, ext_max=MAX_PAIR_EXTENSION, budget=COMBO_BUDGET):
@@ -615,7 +621,8 @@ def _is_pinned(result, ceiling):
     return max(extensions) >= ceiling
 
 
-def _extension_ceilings(base, cap=EXTENSION_CEILING_CAP, growth=1.5, tries=4):
+def _extension_ceilings(base, cap=EXTENSION_CEILING_CAP, growth=1.5,
+                        tries=EXTENSION_CEILING_TRIES):
     """Ceiling schedule: the base, then 1.5x each time, stopping at the cap."""
     ceilings = []
     ceiling = int(base)
@@ -627,6 +634,20 @@ def _extension_ceilings(base, cap=EXTENSION_CEILING_CAP, growth=1.5, tries=4):
     return ceilings
 
 
+def _attempt_rank(entry):
+    """
+    Rank fallback candidates when no ceiling produced an interior optimum:
+    a real solution beats a fallback, then the evenest gaps, then the
+    shortest arms (a bigger stitch for the same evenness is not a better one).
+    """
+    result = entry["result"]
+    return (
+        0 if result.get("success") else 1,
+        result.get("gap_variance", float("inf")),
+        max(result.get("pair_extensions") or (0,)),
+    )
+
+
 def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label):
     """
     Run one group's alignment, growing the extension ceiling while the winner
@@ -634,19 +655,24 @@ def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label
 
     A pinned winner means the search wanted longer arms than the grid allowed,
     so its "best" is an artefact of the bound, not an optimum. Growing until the
-    optimum is interior fixes that. We stop at the FIRST interior result rather
-    than continuing to grow, because an over-wide grid lets a degenerate
-    long-armed solution win the variance tie-break (measured on 2x2 k1=1 k2=1:
-    a 900px ceiling picks 880/870px arms with a worse gap than the 300px
-    ceiling's 290px arms).
+    optimum is interior fixes that.
+
+    We stop at the FIRST interior success rather than continuing to grow,
+    because an over-wide grid lets a degenerate long-armed solution win the
+    variance tie-break. Measured on 2x2 LH k1=1 k2=1, where 300px already gives
+    an interior optimum: a 1000px ceiling trades 240px arms for 1000px ones to
+    move the gap 56.66 -> 56.42. That is a far bigger, floppier stitch for a
+    quarter of a pixel, so the schedule must not chase it.
+
+    If every ceiling stays pinned, fall back to the best attempt by
+    `_attempt_rank` rather than blindly taking the widest one.
 
     Returns (result, settings).
     """
     ceilings = _extension_ceilings(base_ceiling) if escalate else [int(base_ceiling)]
 
-    best = None
-    best_settings = None
-    for attempt, ceiling in enumerate(ceilings):
+    attempts = []
+    for index, ceiling in enumerate(ceilings):
         if fixed_step is None:
             step, combos = pick_extension_step(pairs, ceiling)
         else:
@@ -655,31 +681,37 @@ def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label
 
         result = run(ceiling, step)
         settings = {"ceiling": ceiling, "step": step, "pairs": pairs,
-                    "combos": combos, "attempts": attempt + 1}
+                    "combos": combos, "attempts": index + 1}
 
-        usable = result.get("success") or result.get("is_fallback")
-        if best is None or (usable and not (best.get("success") or best.get("is_fallback"))):
-            best, best_settings = result, settings
-
-        if not usable:
+        if not (result.get("success") or result.get("is_fallback")):
             if verbose:
                 print(f"    {label}: ceiling {ceiling} -> no solution, growing")
+            attempts.append({"result": result, "settings": settings})
             continue
 
+        attempts.append({"result": result, "settings": settings})
         pinned = _is_pinned(result, ceiling)
-        if usable and (result.get("success") or not best.get("success")):
-            best, best_settings = result, settings
-        if not pinned:
-            if verbose and attempt:
+
+        if result.get("success") and not pinned:
+            if verbose and index:
                 print(f"    {label}: ceiling {ceiling} -> interior optimum "
                       f"{result.get('pair_extensions')}, accepted")
-            break
+            settings["pinned"] = False
+            return result, settings
+
         if verbose:
-            print(f"    {label}: ceiling {ceiling} -> pinned at "
+            state = "pinned at" if pinned else "only a fallback at"
+            print(f"    {label}: ceiling {ceiling} -> {state} "
                   f"{result.get('pair_extensions')}, growing")
 
-    best_settings["pinned"] = _is_pinned(best, best_settings["ceiling"])
-    return best, best_settings
+    usable = [a for a in attempts
+              if a["result"].get("success") or a["result"].get("is_fallback")]
+    chosen = min(usable, key=_attempt_rank) if usable else attempts[-1]
+    chosen["settings"]["pinned"] = _is_pinned(chosen["result"], chosen["settings"]["ceiling"])
+    if verbose:
+        print(f"    {label}: no interior optimum in {len(ceilings)} ceilings, "
+              f"keeping ceiling {chosen['settings']['ceiling']}")
+    return chosen["result"], chosen["settings"]
 
 
 def align_continuation_level(strands, m, n, k, direction, hand, level, level_info,
