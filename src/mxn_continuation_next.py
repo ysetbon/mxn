@@ -920,7 +920,19 @@ def _mask_pairs(v_order, h_order, k):
     return pairs
 
 
-def _relay_masks(masks, virtual_list, back_map, plan, k, verbose):
+def _order_disagreement(candidate, reference):
+    """
+    How far a band's order departs from the engine's, as a count of swapped
+    neighbours over the names the two share.
+
+    Zero means the candidate walks the band the same way the engine does.
+    """
+    rank = {name: i for i, name in enumerate(reference)}
+    shared = [rank[n] for n in candidate if n in rank]
+    return sum(1 for i, a in enumerate(shared) for b in shared[i + 1:] if a > b)
+
+
+def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbose):
     """
     Re-lay the masks across the bands the ring actually has.
 
@@ -954,30 +966,37 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, verbose):
     if all(v and h for v, h in current) and not stray(current):
         return False
 
+    # Several arrangements put every mask on a real crossing while covering a
+    # DIFFERENT half of the checkerboard, which inverts who goes over at those
+    # crossings. Landing on crossings is necessary, not sufficient. So rank by
+    # how closely each one walks the bands the way the engine walks its own —
+    # that is what carries the over-and-under convention from level 1 outward.
     best = None
-    for v_band, h_band in ((plan["v_order"], plan["h_order"]),
-                           (plan["h_order"], plan["v_order"])):
+    for v_band, h_band, roles in ((plan["v_order"], plan["h_order"], "as planned"),
+                                  (plan["h_order"], plan["v_order"], "roles swapped")):
         for v_rev in (False, True):
             for h_rev in (False, True):
-                pairs = _mask_pairs(list(reversed(v_band)) if v_rev else list(v_band),
-                                    list(reversed(h_band)) if h_rev else list(h_band),
-                                    k)
+                v_seq = list(reversed(v_band)) if v_rev else list(v_band)
+                h_seq = list(reversed(h_band)) if h_rev else list(h_band)
+                pairs = _mask_pairs(v_seq, h_seq, k)
                 if len(pairs) != len(masks):
                     continue
-                score = stray(pairs)
+                score = (stray(pairs),
+                         _order_disagreement(v_seq, v_order)
+                         + _order_disagreement(h_seq, h_order),
+                         roles != "as planned")
                 if best is None or score < best[0]:
-                    best = (score, pairs)
-                if score == 0:
-                    break
+                    best = (score, pairs, roles, v_rev, h_rev)
 
-    if best is None or best[0]:
+    if best is None or best[0][0]:
         if verbose:
             print(f"    masks: no re-pairing puts them all on crossings "
-                  f"({'none fit' if best is None else str(best[0]) + ' stray'}), "
+                  f"({'none fit' if best is None else str(best[0][0]) + ' stray'}), "
                   f"leaving them")
         return False
 
-    for mask, (v_virtual, h_virtual) in zip(masks, best[1]):
+    (_stray, disagree, _swapped), pairs, roles, v_rev, h_rev = best
+    for mask, (v_virtual, h_virtual) in zip(masks, pairs):
         v_real = back_map.get(v_virtual)
         h_real = back_map.get(h_virtual)
         if v_real is None or h_real is None:
@@ -987,8 +1006,10 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, verbose):
         mask["layer_name"] = f"{v_real['layer_name']}_{h_real['layer_name']}"
         mask["set_number"] = int(f"{v_real['set_number']}{h_real['set_number']}")
     if verbose:
-        print(f"    masks: re-laid across the direction families, "
-              f"{len(masks)} on real crossings")
+        print(f"    masks: re-laid across the direction families, {len(masks)} on "
+              f"real crossings ({roles}"
+              f"{', V reversed' if v_rev else ''}{', H reversed' if h_rev else ''}, "
+              f"{disagree} order disagreements with the engine)")
     return True
 
 
@@ -1057,26 +1078,38 @@ def _mirror_extensions(attempt, chosen, plan, expected, sides, verbose):
     if not (chosen["h"].get("success") and chosen["v"].get("success")):
         return None
 
-    # the near band is the one that had to reach least
+    # The near band -- the one that had to reach least -- donates first. Its combo
+    # is not always legal on the other band, though: measured on 3x3 ks=[1,1,-1]
+    # at level 3, where H's (10, 30, 20) is never a valid configuration for V. So
+    # if the near band cannot donate, the far band tries, since a symmetric
+    # stitch on the far band's combo still beats two bands that disagree.
     if max(v_ext) <= max(h_ext):
-        donor, force, side = v_ext, (v_ext, None), "V -> H"
+        order = [(v_ext, (v_ext, None), "V -> H"), (h_ext, (None, h_ext), "H -> V")]
     else:
-        donor, force, side = h_ext, (None, h_ext), "H -> V"
+        order = [(h_ext, (None, h_ext), "H -> V"), (v_ext, (v_ext, None), "V -> H")]
 
     if verbose:
-        print(f"    bands disagree: H{h_ext} V{v_ext} — copying {side} {donor}")
-    alt = attempt(plan, force)
-    if alt is None:
+        print(f"    bands disagree: H{h_ext} V{v_ext} — trying "
+              f"{' then '.join(side for _d, _f, side in order)}")
+    for donor, force, side in order:
+        alt = attempt(plan, force)
+        if alt is None:
+            if verbose:
+                print(f"    {side} {donor}: never a valid configuration on the "
+                      f"other band")
+            continue
+        if alt["crossings"] < chosen["crossings"]:
+            if verbose:
+                print(f"    {side} {donor}: ring drops to {alt['crossings']}"
+                      f"/{expected}, rejected")
+            continue
         if verbose:
-            print(f"    {side}: not reproducible on the other band, keeping both")
-        return None
-    if alt["crossings"] < chosen["crossings"]:
-        if verbose:
-            print(f"    {side}: ring drops to {alt['crossings']}/{expected}, keeping both")
-        return None
+            print(f"    {side} {donor}: ring {alt['crossings']}/{expected}, "
+                  f"both bands on {donor}")
+        return alt
     if verbose:
-        print(f"    {side}: ring {alt['crossings']}/{expected}, both bands on {donor}")
-    return alt
+        print(f"    neither band can donate, keeping H{h_ext} V{v_ext}")
+    return None
 
 
 def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label):
@@ -1322,7 +1355,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     relaid = False
     if plan_used is not None and level_info["new_masks"]:
         relaid = _relay_masks(level_info["new_masks"], virtual_list, back_map,
-                              plan_used, k, verbose)
+                              plan_used, k, list(h_order), list(v_order), verbose)
 
     # Masks copy the geometry of the vertical strand they sit on.
     by_name = {s["layer_name"]: s for s in strands}
