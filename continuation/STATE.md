@@ -36,15 +36,31 @@ the obvious next task:
 python3 continuation/make_diagrams.py --m 3 --n 3 --ks 1 1 -1 --out /tmp/seq
 ```
 
-**Level 4 onward** — infeasible, and for a different reason from level 3. On
-2×2 `[1, 1, −1, −1]` the rescue does fire and finds a clean split (78.51° of
-k-based fan down to 18.10° of family fan), and the retry finds nothing either.
-Sweeping every heading at every extension on a 0–600px grid: **0 of 441 combos
-have a valid configuration**, for the direction families and the k-based groups
-alike. Not a grouping problem, not a window problem, not an anchor problem. The
-binding constraint is likely that middles cannot extend
-(`allow_inner_extensions=False`) so they must already lie on the required
-parallel lines, which gets harder as the ring distorts. Unproven.
+**Level 4 onward** — infeasible on both sizes, and for a different reason from
+level 3.
+
+| case | level 4 | gaps | across |
+| --- | --- | --- | --- |
+| 2×2 `[1, 1, −1, −1]` | fb/fb | 147.97 / 147.97 | 0/16 |
+| 3×3 `[1, 1, −1, −1]` | fb/fb | 161.95 / 286.01 | 2/36 |
+
+On 2×2 the rescue does fire and finds a clean split (78.51° of k-based fan down
+to 18.10° of family fan), and the retry finds nothing either. Sweeping every
+heading at every extension on a 0–600px grid: **0 of 441 combos have a valid
+configuration**, for the direction families and the k-based groups alike. Not a
+grouping problem, not a window problem, not an anchor problem.
+
+The binding constraint is likely that middle strands cannot extend
+(`allow_inner_extensions=False`), so they must already lie on the required
+parallel lines, which gets harder as the ring distorts. **Unproven** — the
+cheapest test is to re-run the level-4 sweep with `allow_inner_extensions=True`
+and see whether any combo becomes valid. If that is the answer, the fix is a
+policy question (how much inner extension is acceptable) rather than a search
+one.
+
+Note the stray-mask counts at level 4 (8 on 2×2, 18 on 3×3, i.e. all of them)
+are a *consequence* of the broken ring, not a separate fault: `_relay_masks`
+correctly declines to re-pair when no arrangement puts every mask on a crossing.
 
 **2×2 at `k = 2`, level 3** — `across 0/16`. That is the max-k case, whose
 bespoke level-1 layout is defined in grid coordinates and has never been
