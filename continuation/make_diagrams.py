@@ -27,38 +27,63 @@ from ui_utils import _get_active_strands
 
 
 def audit(strands, level):
-    """(across, within, masks, stray) for the ring this level produced."""
+    """(across, within, masks, stray, broken) for the ring this level produced.
+
+    `broken` counts arms whose crossings do not alternate over/under. A mask
+    forces its `first_selected_strand` over; an unmasked crossing goes to
+    whichever arm is drawn later. Masks landing on real crossings is necessary
+    but not sufficient — the unmasked half depends on the arms' draw order, and
+    a stale order breaks the weave without moving a single mask.
+    """
     _, _, dst_a, dst_b = NX.level_suffixes(level)
     arms = [s for s in strands if s.get("type") == "AttachedStrand"
             and s["layer_name"].endswith((f"_{dst_a}", f"_{dst_b}"))]
     if len(arms) < 4:
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
     by_name = {s["layer_name"]: s for s in arms}
     band_a, _band_b, _fan = NX._split_direction_families(by_name, list(by_name))
     band_a = set(band_a)
 
+    masks = [s for s in strands if s.get("type") == "MaskedStrand"
+             and NX._is_level_mask(s.get("layer_name", ""), dst_a, dst_b)]
+    masked_over = {frozenset((s.get("first_selected_strand"),
+                              s.get("second_selected_strand"))):
+                   s.get("first_selected_strand") for s in masks}
+    draw_index = {s["layer_name"]: i for i, s in enumerate(strands)}
+
     across = within = 0
     crossing_pairs = set()
+    along = {a["layer_name"]: [] for a in arms}
     for i, a in enumerate(arms):
         for b in arms[i + 1:]:
             if NX._segment_crossing(a, b) is None:
                 continue
-            crossing_pairs.add(frozenset((a["layer_name"], b["layer_name"])))
-            if (a["layer_name"] in band_a) == (b["layer_name"] in band_a):
+            an, bn = a["layer_name"], b["layer_name"]
+            crossing_pairs.add(frozenset((an, bn)))
+            if (an in band_a) == (bn in band_a):
                 within += 1
             else:
                 across += 1
+            over = masked_over.get(frozenset((an, bn)))
+            if over is None:
+                over = an if draw_index[an] > draw_index[bn] else bn
+            along[an].append((NX._segment_crossing(a, b), over == an))
+            along[bn].append((NX._segment_crossing(b, a), over == bn))
 
-    masks = [s for s in strands if s.get("type") == "MaskedStrand"
-             and NX._is_level_mask(s.get("layer_name", ""), dst_a, dst_b)]
+    broken = 0
+    for seq in along.values():
+        seq.sort()
+        if any(seq[i][1] == seq[i + 1][1] for i in range(len(seq) - 1)):
+            broken += 1
+
     stray = sum(1 for s in masks
                 if frozenset((s.get("first_selected_strand"),
                               s.get("second_selected_strand"))) not in crossing_pairs)
-    return across, within, len(masks), stray
+    return across, within, len(masks), stray, broken
 
 
 def describe(result, strands, level, k, expected):
-    across, within, n_masks, stray = audit(strands, level)
+    across, within, n_masks, stray, broken = audit(strands, level)
 
     def state(axis):
         r = result[axis]
@@ -73,14 +98,14 @@ def describe(result, strands, level, k, expected):
     if search.get("masks_relaid"):
         applied.append("masks re-laid")
 
-    healthy = across == expected and not within and not stray
+    healthy = across == expected and not within and not stray and not broken
     print(f"  L{level} k={k:<3d}{state('horizontal')}/{state('vertical'):<4s} "
           f"gap {result['horizontal'].get('average_gap', 0):7.2f}/"
           f"{result['vertical'].get('average_gap', 0):<7.2f} "
           f"ext {tuple(result['horizontal'].get('pair_extensions') or ())}"
           f"{tuple(result['vertical'].get('pair_extensions') or ())}")
     print(f"        across {across:>3d}/{expected}  within {within:>2d}  "
-          f"masks {n_masks:>2d}  stray {stray:>2d}   "
+          f"masks {n_masks:>2d}  stray {stray:>2d}  broken {broken:>2d}   "
           f"{', '.join(applied) or 'k-based groups'}   "
           f"{'WEAVE' if healthy else '<<< NOT A WEAVE'}")
     sys.stdout.flush()
@@ -91,7 +116,7 @@ def describe(result, strands, level, k, expected):
             "ext": [list(result["horizontal"].get("pair_extensions") or ()),
                     list(result["vertical"].get("pair_extensions") or ())],
             "across": across, "within": within, "masks": n_masks, "stray": stray,
-            "applied": applied, "healthy": healthy}
+            "broken": broken, "applied": applied, "healthy": healthy}
 
 
 def run(m, n, ks, hand, direction, render, out_dir):

@@ -12,11 +12,11 @@ One `k` per level. `--ks 1 1 -1` means: first twist at `k = 1`, second at
 ```
 === 2x2 lh cw ks=[1, 1, -1]   (a healthy ring: across 16, within 0, stray 0) ===
   L1 k=1  ok/ok  gap   56.43/56.41   ext (80, 60)(80, 60)
-        across  16/16  within  0  masks  8  stray  0   k-based groups   WEAVE
+        across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
   L2 k=1  ok/ok  gap   56.58/56.60   ext (90, 70)(90, 70)
-        across  16/16  within  0  masks  8  stray  0   k-based groups   WEAVE
+        across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
   L3 k=-1 ok/ok  gap   56.48/56.43   ext (80, 60)(80, 60)
-        across  16/16  within  0  masks  8  stray  0   regrouped, masks re-laid   WEAVE
+        across  16/16  within  0  masks  8  stray  0  broken  0   regrouped, masks re-laid   WEAVE
 ```
 
 Exit status is 0 only when every level is a weave, so it drops straight into a
@@ -33,6 +33,7 @@ loop or a CI check.
 | `within` | crossings inside a band. Must be `0` — a band's arms are parallel |
 | `masks` | masks on this level. Half the crossings get one; the rest come from draw order |
 | `stray` | masks sitting on a pair that does not cross. Must be `0` |
+| `broken` | arms whose crossings do not alternate over/under. Must be `0` — `stray 0` alone does not guarantee the weave, because the unmasked half depends on the arms' draw order |
 | last column | which corrections fired: `regrouped`, `bands mirrored`, `masks re-laid` |
 
 The last three columns are the ones that matter. A level can report `ok/ok` with

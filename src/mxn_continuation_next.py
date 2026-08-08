@@ -946,6 +946,9 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
     Band roles and spatial order are conventions we cannot read off the families
     directly, so every combination is tried and the one that puts all eight
     masks on real crossings wins. If none does, the masks are left alone.
+
+    Returns the winning `(v_seq, h_seq)` bands (virtual names) so the caller
+    can re-lay the draw order to match, or None when nothing was touched.
     """
     arms = {s["layer_name"]: s for s in virtual_list
             if s.get("type") == "AttachedStrand"
@@ -964,7 +967,7 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
                 real_to_virtual.get(m.get("second_selected_strand")))
                for m in masks]
     if all(v and h for v, h in current) and not stray(current):
-        return False
+        return None
 
     # Several arrangements put every mask on a real crossing while covering a
     # DIFFERENT half of the checkerboard, which inverts who goes over at those
@@ -986,21 +989,21 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
                          + _order_disagreement(h_seq, h_order),
                          roles != "as planned")
                 if best is None or score < best[0]:
-                    best = (score, pairs, roles, v_rev, h_rev)
+                    best = (score, pairs, v_seq, h_seq, roles, v_rev, h_rev)
 
     if best is None or best[0][0]:
         if verbose:
             print(f"    masks: no re-pairing puts them all on crossings "
                   f"({'none fit' if best is None else str(best[0][0]) + ' stray'}), "
                   f"leaving them")
-        return False
+        return None
 
-    (_stray, disagree, _swapped), pairs, roles, v_rev, h_rev = best
+    (_stray, disagree, _swapped), pairs, v_seq, h_seq, roles, v_rev, h_rev = best
     for mask, (v_virtual, h_virtual) in zip(masks, pairs):
         v_real = back_map.get(v_virtual)
         h_real = back_map.get(h_virtual)
         if v_real is None or h_real is None:
-            return False
+            return None
         mask["first_selected_strand"] = v_real["layer_name"]
         mask["second_selected_strand"] = h_real["layer_name"]
         mask["layer_name"] = f"{v_real['layer_name']}_{h_real['layer_name']}"
@@ -1016,6 +1019,44 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
               f"real crossings ({roles}"
               f"{', V reversed' if v_rev else ''}{', H reversed' if h_rev else ''}, "
               f"{disagree} order disagreements with the engine)")
+    return v_seq, h_seq
+
+
+def _relay_draw_order(strands, bands, back_map, verbose):
+    """
+    Re-lay the arms' draw order to match the re-laid masks.
+
+    Only half of a ring's crossings carry a mask; the other half rely on every
+    arm of the horizontal band being drawn AFTER every arm of the vertical
+    band, which `add_continuation_level` guarantees by appending the ring as
+    v-order then h-order. A regrouped ring's bands are a different partition of
+    the same arms, so that guarantee goes stale: measured on 2x2 ks=[1,1,-1]
+    at level 3, six of the eight arms broke over/under alternation while every
+    mask sat on a real crossing — the masked half was right and the unmasked
+    half resolved by the stale k-based list order.
+
+    Reordering the ring's own slots in the strand list restores the level-1
+    convention. Nothing outside the ring moves, so lower levels and the
+    level's masks (which sit after the arms) keep their draw order.
+    """
+    v_seq, h_seq = bands
+    ordered = []
+    for virtual in list(v_seq) + list(h_seq):
+        real = back_map.get(virtual)
+        if real is None:
+            return False
+        ordered.append(real["layer_name"])
+    wanted = set(ordered)
+    slots = [i for i, s in enumerate(strands)
+             if s.get("type") == "AttachedStrand"
+             and s.get("layer_name") in wanted]
+    by_name = {strands[i]["layer_name"]: strands[i] for i in slots}
+    if len(slots) != len(ordered) or set(by_name) != wanted:
+        return False
+    for slot, name in zip(slots, ordered):
+        strands[slot] = by_name[name]
+    if verbose:
+        print(f"    draw order: ring re-laid to its bands, {ordered}")
     return True
 
 
@@ -1357,11 +1398,17 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
             _copy_geometry(v_strand, real)
 
     # A regrouped ring has different bands from the ones the masks were built
-    # against, so re-pair them before they take their geometry.
+    # against, so re-pair them before they take their geometry — and re-lay
+    # the arms' draw order, because the unmasked half of the crossings comes
+    # out right only when the whole h-band draws over the whole v-band.
     relaid = False
     if plan_used is not None and level_info["new_masks"]:
-        relaid = _relay_masks(level_info["new_masks"], virtual_list, back_map,
-                              plan_used, k, list(h_order), list(v_order), verbose)
+        relaid_bands = _relay_masks(level_info["new_masks"], virtual_list,
+                                    back_map, plan_used, k,
+                                    list(h_order), list(v_order), verbose)
+        relaid = relaid_bands is not None
+        if relaid:
+            _relay_draw_order(strands, relaid_bands, back_map, verbose)
 
     # Masks copy the geometry of the vertical strand they sit on.
     by_name = {s["layer_name"]: s for s in strands}

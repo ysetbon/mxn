@@ -85,6 +85,12 @@ Expected level-1 values, for comparison:
   read `within` too.
 - **Nor do masks landing on real crossings.** Several arrangements do that while
   covering a different half of the checkerboard, which inverts who goes over.
+- **Nor is `stray 0` the end of it.** Only half the crossings carry a mask; the
+  unmasked half resolves by the arms' draw order in the strand list. After a
+  regroup that order is stale, and 2×2 `[1, 1, −1]` level 3 shipped a "clean"
+  16/16, stray-0 ring with 6 of 8 arms breaking over/under alternation.
+  `_relay_draw_order` re-lays the ring's slots when the masks are re-laid, and
+  the audit's `broken` column now counts alternation failures directly.
 - **The engine's gap rule** is between *consecutive strands in the group's
   order* for 3+ strands, not between the members of an outside-in pair. Pairing
   only decides which strands share an extension value. Modelling it the other

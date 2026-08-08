@@ -40,11 +40,13 @@ Every level prints one line:
 
 ```
 L3 k=-1 ok/ok  gap 56.48/56.43  ext (80,60)(80,60)
-       across 16/16  within 0  masks 8  stray 0   regrouped, masks re-laid   WEAVE
+       across 16/16  within 0  masks 8  stray 0  broken 0   regrouped, masks re-laid   WEAVE
 ```
 
 `across` is the number of crossings between the ring's two bands, `within` the
-number inside a band (must be zero — a band's arms are parallel), and `stray` the
-number of masks sitting on a pair that does not actually cross. A healthy
-`m × n` ring has `(2m)(2n)` across, `0` within, `0` stray. **Gaps alone do not
-tell you a level is good**; see ALGORITHM.md, "Why crossings and not gaps".
+number inside a band (must be zero — a band's arms are parallel), `stray` the
+number of masks sitting on a pair that does not actually cross, and `broken`
+the number of arms whose crossings fail to alternate over/under. A healthy
+`m × n` ring has `(2m)(2n)` across, `0` within, `0` stray, `0` broken. **Gaps
+alone do not tell you a level is good**; see ALGORITHM.md, "Why crossings and
+not gaps".

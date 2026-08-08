@@ -238,6 +238,18 @@ If the existing masks already sit on real crossings, nothing is touched; if no
 arrangement scores zero stray, they are left alone rather than replaced with a
 guess.
 
+Re-laying the masks is only half the repair. Masks decide the masked half of
+the crossings; the **unmasked half** comes out right only because every arm of
+the horizontal band is drawn after every arm of the vertical band —
+`add_continuation_level` appends the ring as v-order then h-order. A regrouped
+ring's bands are a different partition of the same arms, so that draw order
+goes stale: on 2×2 `ks = [1, 1, −1]` at level 3, six of the eight arms broke
+over/under alternation while every mask sat on a real crossing. So
+`_relay_draw_order` reorders the ring's own slots in the strand list to the
+re-laid bands (v-band then h-band). Nothing outside the ring moves, and with
+both repairs the level-3 weave alternates `OuOu` on every arm — the same rule
+levels 1 and 2 follow.
+
 ## 10. Constants
 
 | name | value | what it is |
