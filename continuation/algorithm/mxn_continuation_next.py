@@ -1162,10 +1162,18 @@ def _mirror_extensions(attempt, chosen, plan, expected, sides, verbose):
     # at level 3, where H's (10, 30, 20) is never a valid configuration for V. So
     # if the near band cannot donate, the far band tries, since a symmetric
     # stitch on the far band's combo still beats two bands that disagree.
+    #
+    # BOTH sides are pinned to the donor combo. Pinning only the receiver and
+    # letting the donor re-search sounds equivalent -- the donor's own optimum
+    # IS the combo -- but the re-search runs on the full grid, not whatever
+    # bounded grid the donor's result came from, and can wander: measured on
+    # 2x2 [1,1,-1,-1,-1,-1,-1] at level 7, where H's re-search left its seeded
+    # (50, 40) for a long-armed (20, 170) while V sat pinned at (50, 40), and
+    # the "mirrored" level shipped with two different bands.
     if max(v_ext) <= max(h_ext):
-        order = [(v_ext, (v_ext, None), "V -> H"), (h_ext, (None, h_ext), "H -> V")]
+        order = [(v_ext, (v_ext, v_ext), "V -> H"), (h_ext, (h_ext, h_ext), "H -> V")]
     else:
-        order = [(h_ext, (None, h_ext), "H -> V"), (v_ext, (v_ext, None), "V -> H")]
+        order = [(h_ext, (h_ext, h_ext), "H -> V"), (v_ext, (v_ext, v_ext), "V -> H")]
 
     if verbose:
         print(f"    bands disagree: H{h_ext} V{v_ext} — trying "

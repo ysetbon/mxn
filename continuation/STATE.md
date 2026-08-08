@@ -17,6 +17,7 @@ short-circuits deep levels.
 | 2×2 `[1, 1, −1]` | 3/3 | (80,60) (90,70) (40,70) | 56.4–57.3 | L2/L3 seeded, ~6 s total |
 | 2×2 `[1, 1, 1]` | 3/3 | (80,60) (90,70) (50,20) | 56.4–57.3 | L3 mirrored |
 | 2×2 `[1, 1, 1, 1, 1, 1]` | 6/6 | …(50,20) (80,60) (60,40) (90,70) | 56.3–57.3 | seeded, 6 s total |
+| 2×2 `[1, 1, −1, −1, −1, −1, −1]` | 7/7 | …(40,70) (30,100) (40,70) (30,100) (50,40) | 56.3–57.6 | seeded + mirrored, ~10 s |
 | 2×2 `[1, −1, 1, −1]` | 4/4 | (80,60) (30,100) (110,90) (50,40) | 56.1–56.7 | all seeded, 6 s |
 | 2×2 `[1, 1, −1, −1]` | 4/4 | …(40,70) (30,100) | 56.3–57.3 | seeded, 6 s |
 | 2×2 `[−1, −1]`, `[−1, 1]`, `[1, −1]` | 2/2 | — | 56.1–57.3 | native |
@@ -97,6 +98,12 @@ Then the deep chains: 2×2 `[1, 1, -1]`, `[1, 1, 1, 1, 1, 1]` and
   checkerboard half inverts who goes over), nor `stray 0` (the unmasked half
   resolves by the arms' draw order in the strand list — the audit's `broken`
   column counts over/under alternation failures directly).
+- **The mirror must pin both bands.** Pinning only the receiver and letting
+  the donor re-search "to its own optimum" lets the re-search escape the
+  bounded grid the donor's combo came from: on 2×2 seven levels deep, H left
+  its seeded (50, 40) for a long-armed (20, 170) while V sat pinned at
+  (50, 40), and the level shipped tagged `bands mirrored` with two different
+  bands. Both sides are pinned to the donor combo now.
 - **The engine's gap rule** is between *consecutive strands in the group's
   order* for 3+ strands, not between the members of an outside-in pair. Pairing
   only decides which strands share an extension value.
