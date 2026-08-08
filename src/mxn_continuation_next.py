@@ -1005,6 +1005,12 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
         mask["second_selected_strand"] = h_real["layer_name"]
         mask["layer_name"] = f"{v_real['layer_name']}_{h_real['layer_name']}"
         mask["set_number"] = int(f"{v_real['set_number']}{h_real['set_number']}")
+        # A mask paints the strand it covers for, so it has to carry that
+        # strand's colour. `_make_mask` cloned it from whichever arm the k-based
+        # pairing named, and re-pointing without this leaves the covered patch
+        # painted in the old arm's colour.
+        if v_real.get("color") is not None:
+            mask["color"] = copy.deepcopy(v_real["color"])
     if verbose:
         print(f"    masks: re-laid across the direction families, {len(masks)} on "
               f"real crossings ({roles}"
