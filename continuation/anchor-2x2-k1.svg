@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="966.0 126.0 532.0 532.0" width="720" role="img" aria-label="2x2 lh k=1 - purple = extension 0 (each arm's outermost crossing)">
+<rect x="966.0" y="126.0" width="532.0" height="532.0" fill="none"/>
+<line x1="1204.00" y1="196.00" x2="1101.25" y2="528.54" stroke="#E0913F" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1148.00" y1="568.00" x2="1255.32" y2="220.66" stroke="#E0913F" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1316.00" y1="216.00" x2="1208.68" y2="563.34" stroke="#E0913F" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1260.00" y1="588.00" x2="1362.75" y2="255.46" stroke="#E0913F" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1428.00" y1="364.00" x2="1095.48" y2="261.19" stroke="#3FA5A0" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1056.00" y1="308.00" x2="1403.32" y2="415.38" stroke="#3FA5A0" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1408.00" y1="476.00" x2="1060.68" y2="368.62" stroke="#3FA5A0" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1036.00" y1="420.00" x2="1368.52" y2="522.81" stroke="#3FA5A0" stroke-width="11" stroke-linecap="round" opacity="0.85"/>
+<line x1="1126.17" y1="447.88" x2="1101.25" y2="528.54" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1101.25" cy="528.54" r="7" fill="#EE6352"/>
+<circle cx="1126.17" cy="447.88" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1229.95" y1="302.77" x2="1255.32" y2="220.66" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1255.32" cy="220.66" r="7" fill="#EE6352"/>
+<circle cx="1229.95" cy="302.77" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1234.05" y1="481.23" x2="1208.68" y2="563.34" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1208.68" cy="563.34" r="7" fill="#EE6352"/>
+<circle cx="1234.05" cy="481.23" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1337.83" y1="336.12" x2="1362.75" y2="255.46" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1362.75" cy="255.46" r="7" fill="#EE6352"/>
+<circle cx="1337.83" cy="336.12" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1176.15" y1="286.14" x2="1095.48" y2="261.19" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1095.48" cy="261.19" r="7" fill="#EE6352"/>
+<circle cx="1176.15" cy="286.14" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1321.18" y1="389.99" x2="1403.32" y2="415.38" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1403.32" cy="415.38" r="7" fill="#EE6352"/>
+<circle cx="1321.18" cy="389.99" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1142.82" y1="394.01" x2="1060.68" y2="368.62" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1060.68" cy="368.62" r="7" fill="#EE6352"/>
+<circle cx="1142.82" cy="394.01" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<line x1="1287.85" y1="497.86" x2="1368.52" y2="522.81" stroke="#8A97A0" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="1368.52" cy="522.81" r="7" fill="#EE6352"/>
+<circle cx="1287.85" cy="497.86" r="9" fill="#9B8BD6" stroke="#5B4E96" stroke-width="2"/>
+<text x="980.0" y="156.0" fill="#8A97A0" font-family="ui-monospace,monospace" font-size="19">2x2 lh k=1 - purple = extension 0 (each arm's outermost crossing)</text>
+</svg>
