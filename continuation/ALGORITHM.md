@@ -117,6 +117,21 @@ strand_width * 1.5]` = `[56, 69]`.
   optimum**. It must not chase further: an over-wide grid lets a degenerate
   long-armed solution win the variance tie-break.
 
+### Seeding from earlier levels
+
+An aligned ring is geometrically another starting-stitch ring, so deeper
+levels tend to land on — or right next to — combos already seen: on 2×2
+`ks = [1, 1, −1]` the third twist settles on the exact `(80, 60)` the first
+one uses. `align_continuation_level` therefore takes `seed_extensions`, a list
+of `(h_combo, v_combo)` pairs (the driver passes levels 1..L−1's winners, most
+recent first). Each seed runs as a pinned search — grid sized to contain the
+combo, the engine's own angle window recomputed for it — first on the k-based
+groups, then on the direction families. The first seed whose ring is complete
+wins and the full escalation search is skipped; on 2×2 `[1, 1, −1]` that takes
+level 3 from ~50 s to ~2 s. If no seed produces a complete ring the normal
+search runs unchanged, so seeding can only speed a level up, never change what
+is reachable. A seeded level reports `seeded` in the audit's last column.
+
 ### The angle window
 
 `_compute_pair_angle_range` in the engine, `first_strand` mode: the window is the

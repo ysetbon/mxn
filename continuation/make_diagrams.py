@@ -91,6 +91,8 @@ def describe(result, strands, level, k, expected):
 
     search = result["search"]
     applied = []
+    if search["horizontal"].get("seeded") or search["vertical"].get("seeded"):
+        applied.append("seeded")
     if search["horizontal"].get("rescued") or search["vertical"].get("rescued"):
         applied.append("regrouped")
     if search["horizontal"].get("mirrored") or search["vertical"].get("mirrored"):
@@ -147,6 +149,10 @@ def run(m, n, ks, hand, direction, render, out_dir):
         snapshot = [dict(s) for s in strands]
     rows.append(describe(result, snapshot, 1, ks[0], expected))
 
+    # Every settled level donates its combos as a seed for the next ones,
+    # most recent first — deeper rings tend to land on combos already seen.
+    seeds = [(rows[0]["ext"][0], rows[0]["ext"][1])]
+
     for level in range(2, len(ks) + 1):
         with contextlib.redirect_stdout(io.StringIO()):
             strands, info = NX.add_continuation_level(
@@ -154,13 +160,14 @@ def run(m, n, ks, hand, direction, render, out_dir):
                 k_prev=ks[level - 2], verbose=False)
             result = NX.align_continuation_level(
                 strands, m, n, ks[level - 1], direction, hand, level, info,
-                verbose=False)
+                seed_extensions=list(reversed(seeds)), verbose=False)
             ordinal = {2: "2nd", 3: "3rd"}.get(level, f"{level}th")
             stages.append({"level": level, "k": ks[level - 1],
                            "label": f"{ordinal} twist",
                            "json": NX._snapshot_json(strands)})
             snapshot = [dict(s) for s in strands]
         rows.append(describe(result, snapshot, level, ks[level - 1], expected))
+        seeds.append((rows[-1]["ext"][0], rows[-1]["ext"][1]))
 
     report = {"m": m, "n": n, "hand": hand, "direction": direction, "ks": ks,
               "expected": expected, "seconds": round(time.time() - started, 1),

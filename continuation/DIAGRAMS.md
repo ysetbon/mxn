@@ -34,7 +34,7 @@ loop or a CI check.
 | `masks` | masks on this level. Half the crossings get one; the rest come from draw order |
 | `stray` | masks sitting on a pair that does not cross. Must be `0` |
 | `broken` | arms whose crossings do not alternate over/under. Must be `0` — `stray 0` alone does not guarantee the weave, because the unmasked half depends on the arms' draw order |
-| last column | which corrections fired: `regrouped`, `bands mirrored`, `masks re-laid` |
+| last column | which corrections fired: `seeded`, `regrouped`, `bands mirrored`, `masks re-laid` |
 
 The last three columns are the ones that matter. A level can report `ok/ok` with
 textbook gaps on a ring that is not a weave — see ALGORITHM.md §7.

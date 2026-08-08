@@ -1232,7 +1232,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                              max_pair_extension=MAX_PAIR_EXTENSION,
                              pair_extension_step=None, use_gpu=False,
                              angle_mode=ANGLE_MODE, escalate_extension=None,
-                             mirror_sides=None, verbose=True):
+                             mirror_sides=None, seed_extensions=None,
+                             verbose=True):
     """
     Run the engine's parallel alignment on one continuation level.
 
@@ -1250,6 +1251,19 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     and OFF for level 1: every ring past the first sits further out and needs
     longer arms than the sheet's 200px ceiling allows, while level 1 must keep
     reproducing the published twist exactly. Pass True/False to force it.
+
+    `seed_extensions` warm-starts the search from earlier levels: a list of
+    `(h_combo, v_combo)` pairs, most promising first — in practice the combos
+    levels 1..L-1 settled on. An aligned ring is geometrically another
+    starting-stitch ring, so deeper levels tend to land on (or next to) the
+    combos already seen: measured on 2x2 ks=[1,1,-1], level 3 settles on the
+    exact (80, 60) the first twist uses. Each seed is tried as a pinned search
+    (grid sized to contain the combo, the engine's own angle window recomputed
+    for it), first on the k-based groups, then on the direction families; the
+    first seed whose ring is complete wins and the full escalation search is
+    skipped. If no seed produces a complete ring, the normal search runs
+    unchanged, so seeding can speed a level up but never change what is
+    reachable.
 
     Returns:
         dict with the horizontal and vertical alignment results, plus the
@@ -1366,9 +1380,38 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 "virtual_list": working, "back_map": back,
                 "crossings": _ring_crossings(working)}
 
-    chosen = attempt(None)
-    plan_used = None
-    if rescue is not None and chosen["crossings"] < expected_crossings:
+    chosen, plan_used = None, None
+    seen_seeds = set()
+    for h_combo, v_combo in (seed_extensions or []):
+        h_combo = tuple(int(v) for v in (h_combo or ()))
+        v_combo = tuple(int(v) for v in (v_combo or ()))
+        if (len(h_combo) != h_pairs or len(v_combo) != v_pairs
+                or (h_combo, v_combo) in seen_seeds):
+            continue
+        seen_seeds.add((h_combo, v_combo))
+        for plan in ((None, rescue) if rescue is not None else (None,)):
+            trial = attempt(plan, force=(h_combo, v_combo))
+            if trial is None or trial["crossings"] < expected_crossings:
+                continue
+            # `_pinned_search` labels its settings for the mirror; relabel them
+            # for the report so a seeded level does not read as a mirrored one.
+            for sett in (trial["h_settings"], trial["v_settings"]):
+                sett["mirrored"] = False
+                sett["seeded"] = True
+            if verbose:
+                print(f"    seeded from an earlier level: H{h_combo} V{v_combo} "
+                      f"gives a complete ring on the "
+                      f"{'direction families' if plan is not None else 'k-based groups'}, "
+                      f"skipping the full search")
+            chosen, plan_used = trial, plan
+            break
+        if chosen is not None:
+            break
+
+    if chosen is None:
+        chosen = attempt(None)
+    if rescue is not None and plan_used is None \
+            and chosen["crossings"] < expected_crossings:
         if verbose:
             print(f"    k-based groups (fan {rescue['k_fan']:.1f} deg) gave a ring with "
                   f"{chosen['crossings']}/{expected_crossings} crossings — retrying on "
