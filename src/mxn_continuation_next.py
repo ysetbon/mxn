@@ -634,6 +634,152 @@ def _extension_ceilings(base, cap=EXTENSION_CEILING_CAP, growth=1.5,
     return ceilings
 
 
+# ---------------------------------------------------------------------------
+# Direction-family rescue
+#
+# The engine splits a ring's arms into its two search groups by k-based NAME
+# order, and then asks each group to settle on one shared heading. That holds
+# while a group's arms arrive close to parallel, which is what happens at
+# level 1: measured across every k on 2x2 and 3x3, a level-1 group's arms span
+# only 1.03-4.70 degrees.
+#
+# It stops holding deeper in. At level 3 of 2x2 `ks = [1, 1, -1]` the name-order
+# H group spans 55.3 degrees and the V group 49.0; at `ks = [1, 1, 1]` both span
+# ~88. Those groups have no valid configuration at ANY heading and ANY extension
+# — not a search failure, an impossible request. The arms are still perfectly
+# pairable (every outside-in pair is antiparallel to 0.00 deg); they have simply
+# stopped lining up with the name order, so each group ends up holding one pair
+# from each direction family.
+#
+# Re-splitting the same arms by their actual heading recovers two families of
+# the level-1 shape and the search succeeds again.
+#
+# The window has to grow with them. `first_strand` mode searches the first arm's
+# heading +-20 deg, recentred at every extension combo. Level 1 never needs more
+# than 7.21 of that 20. A regrouped 38-degree family needs 23.08 deg before any
+# valid heading comes into range, and 27.6 to reach the good one, so all 441
+# sampled extension combos are unreachable inside +-20. Hence a window sized to
+# the family's own fan rather than a constant, and spanning both directions
+# along the family line, since a family's best heading can sit antiparallel to
+# its reference.
+# ---------------------------------------------------------------------------
+FAMILY_MIN_HALF_WINDOW = 20.0     # never search narrower than the engine's default
+
+
+def _line_angle(strand):
+    """Heading of a strand as an undirected line, in [0, 180)."""
+    dx = strand["end"]["x"] - strand["start"]["x"]
+    dy = strand["end"]["y"] - strand["start"]["y"]
+    return math.degrees(math.atan2(dy, dx)) % 180.0
+
+
+def _line_separation(a, b):
+    """Angle between two undirected lines, in [0, 90]."""
+    d = abs(a - b) % 180.0
+    return min(d, 180.0 - d)
+
+
+def _line_mean(lines):
+    """Circular mean of undirected lines (doubled-angle averaging)."""
+    doubled = [math.radians(2.0 * L) for L in lines]
+    mx = sum(math.cos(a) for a in doubled) / len(doubled)
+    my = sum(math.sin(a) for a in doubled) / len(doubled)
+    return math.degrees(math.atan2(my, mx)) / 2.0
+
+
+def _line_fan(lines):
+    """Widest separation between any two lines in a group."""
+    return max((_line_separation(a, b) for a in lines for b in lines), default=0.0)
+
+
+def _split_direction_families(by_name, names):
+    """
+    Split arms into two equal direction families, minimising the wider fan.
+
+    Each arm in turn seeds a candidate split: rank the others by how close their
+    line is to the seed's and cut in half. The split whose worse family is
+    narrowest wins. Within a family the arms are ordered across the family line,
+    which is the spatial order the engine's outside-in pairing expects.
+
+    Returns (family_a, family_b, worst_fan) with each family a list of names.
+    """
+    lines = {nm: _line_angle(by_name[nm]) for nm in names}
+    half = len(names) // 2
+    best = None
+    for seed in names:
+        ranked = sorted(names, key=lambda nm: _line_separation(lines[nm], lines[seed]))
+        groups = (ranked[:half], ranked[half:])
+        worst = max(_line_fan([lines[nm] for nm in g]) for g in groups)
+        if best is None or worst < best[0]:
+            best = (worst, groups)
+
+    worst_fan, groups = best
+    ordered = []
+    for group in groups:
+        mean = _line_mean([lines[nm] for nm in group])
+        ux, uy = math.cos(math.radians(mean)), math.sin(math.radians(mean))
+        # signed distance across the family line
+        key = {nm: -by_name[nm]["start"]["x"] * uy + by_name[nm]["start"]["y"] * ux
+               for nm in group}
+        ordered.append(sorted(group, key=lambda nm: key[nm]))
+    return ordered[0], ordered[1], worst_fan
+
+
+def _family_window(by_name, family):
+    """
+    Absolute angle range to search for one direction family.
+
+    Centred on the family's own line, half-width the family's fan but never
+    below the engine's default 20 deg, and extended by 180 so both directions
+    along that line are reachable. A custom range is static (the engine only
+    recentres the automatic `first_strand` window per extension combo), so this
+    has to cover the answer outright.
+    """
+    lines = [_line_angle(by_name[nm]) for nm in family]
+    mean = _line_mean(lines)
+    half = max(FAMILY_MIN_HALF_WINDOW, _line_fan(lines))
+    return mean - half, mean + 180.0 + half
+
+
+def _plan_family_rescue(virtual_list, h_order, v_order):
+    """
+    Work out the direction-family split for a level, from the ring as it stands
+    before any alignment runs.
+
+    Returns None when the arms cannot be regrouped (odd counts, or the two
+    groups are not the same size), or when the split is no better than the
+    k-based one — in that case there is nothing to rescue.
+    """
+    if len(h_order) != len(v_order) or len(h_order) < 2:
+        return None
+
+    by_name = {s["layer_name"]: s for s in virtual_list}
+    names = [nm for nm in list(h_order) + list(v_order) if nm in by_name]
+    if len(names) != len(h_order) + len(v_order):
+        return None
+
+    fam_a, fam_b, worst_fan = _split_direction_families(by_name, names)
+    k_fan = max(_line_fan([_line_angle(by_name[nm]) for nm in group])
+                for group in (h_order, v_order))
+    if worst_fan >= k_fan:
+        return None
+
+    # Keep the family that most resembles the k-based H group on the H side, so
+    # the two searches stay in their usual roles.
+    h_set = set(h_order)
+    if len(h_set & set(fam_b)) > len(h_set & set(fam_a)):
+        fam_a, fam_b = fam_b, fam_a
+
+    return {
+        "h_order": fam_a,
+        "v_order": fam_b,
+        "h_window": _family_window(by_name, fam_a),
+        "v_window": _family_window(by_name, fam_b),
+        "family_fan": worst_fan,
+        "k_fan": k_fan,
+    }
+
+
 def _attempt_rank(entry):
     """
     Rank fallback candidates when no ceiling produced an interior optimum:
@@ -760,38 +906,101 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         print(f"\n--- LEVEL {level} alignment (k={k}, {direction}, mode={angle_mode}, "
               f"escalate={escalate_extension}) ---")
 
-    h_result, h_settings = _search_group(
-        lambda ceiling, step: engine.align_horizontal_strands_parallel(
+    # Planned from the untouched ring, so the H rescue and the V rescue agree on
+    # the split even though the H search moves arms before V runs.
+    rescue = _plan_family_rescue(virtual_list, h_order, v_order)
+
+    def forced_sets():
+        """Present the direction families to the engine as its k-based sets."""
+        plan = rescue
+        return (set(plan["h_order"]), list(plan["h_order"]),
+                set(plan["v_order"]), list(plan["v_order"]))
+
+    def align_h(ceiling, step, window=None):
+        lo, hi = window if window else (None, None)
+        return engine.align_horizontal_strands_parallel(
             virtual_list, n,
             angle_step_degrees=angle_step_degrees,
             max_extension=max_extension,
             strand_width=strand_width,
+            custom_angle_min=lo, custom_angle_max=hi,
             max_pair_extension=ceiling,
             pair_extension_step=step,
             m=m, k=k, direction=direction,
             use_gpu=use_gpu,
             angle_mode=angle_mode,
-        ),
-        h_pairs, max_pair_extension, pair_extension_step,
-        escalate_extension, verbose, "H")
+        )
 
-    if h_result.get("success") or h_result.get("is_fallback"):
-        virtual_list = engine.apply_parallel_alignment(virtual_list, h_result)
-
-    v_result, v_settings = _search_group(
-        lambda ceiling, step: engine.align_vertical_strands_parallel(
+    def align_v(ceiling, step, window=None):
+        lo, hi = window if window else (None, None)
+        return engine.align_vertical_strands_parallel(
             virtual_list, n, m,
             angle_step_degrees=angle_step_degrees,
             max_extension=max_extension,
             strand_width=strand_width,
+            custom_angle_min=lo, custom_angle_max=hi,
             max_pair_extension=ceiling,
             pair_extension_step=step,
             k=k, direction=direction,
             use_gpu=use_gpu,
             angle_mode=angle_mode,
-        ),
+        )
+
+    def with_rescue(align, result, settings, pairs, label):
+        """
+        Retry a group that found nothing, using the direction families.
+
+        Only a group that failed outright is retried: a fallback still means the
+        engine reached a real configuration and merely could not land the gaps,
+        while `success == False` with no fallback means it never found one. The
+        rescue is therefore invisible to every level that currently works.
+        """
+        if rescue is None or result.get("success"):
+            return result, settings
+
+        window = rescue["h_window"] if label == "H" else rescue["v_window"]
+        order = rescue["h_order"] if label == "H" else rescue["v_order"]
+        if verbose:
+            print(f"    {label}: no solution in the k-based group "
+                  f"(fan {rescue['k_fan']:.1f} deg) — retrying on the direction "
+                  f"family {order} (fan {rescue['family_fan']:.1f} deg, window "
+                  f"{window[0]:.1f} to {window[1]:.1f} deg)")
+
+        original = engine._build_k_based_strand_sets
+        engine._build_k_based_strand_sets = lambda *a, **kw: forced_sets()
+        try:
+            retry, retry_settings = _search_group(
+                lambda ceiling, step: align(ceiling, step, window),
+                max(len(order) // 2, 1), max_pair_extension, pair_extension_step,
+                escalate_extension, verbose, f"{label}*")
+        finally:
+            engine._build_k_based_strand_sets = original
+
+        if not retry.get("success"):
+            if verbose:
+                print(f"    {label}: rescue found no solution either, keeping the "
+                      f"original result")
+            return result, settings
+
+        retry_settings["rescued"] = True
+        retry_settings["family"] = list(order)
+        retry_settings["window"] = [window[0], window[1]]
+        return retry, retry_settings
+
+    h_result, h_settings = _search_group(
+        lambda ceiling, step: align_h(ceiling, step),
+        h_pairs, max_pair_extension, pair_extension_step,
+        escalate_extension, verbose, "H")
+    h_result, h_settings = with_rescue(align_h, h_result, h_settings, h_pairs, "H")
+
+    if h_result.get("success") or h_result.get("is_fallback"):
+        virtual_list = engine.apply_parallel_alignment(virtual_list, h_result)
+
+    v_result, v_settings = _search_group(
+        lambda ceiling, step: align_v(ceiling, step),
         v_pairs, max_pair_extension, pair_extension_step,
         escalate_extension, verbose, "V")
+    v_result, v_settings = with_rescue(align_v, v_result, v_settings, v_pairs, "V")
 
     if v_result.get("success") or v_result.get("is_fallback"):
         virtual_list = engine.apply_parallel_alignment(virtual_list, v_result)
