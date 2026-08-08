@@ -129,6 +129,18 @@ COMBO_BUDGET = 400_000
 EXTENSION_CEILING_CAP = 1200
 EXTENSION_CEILING_TRIES = 6
 
+# Where a new level's stubs are welded onto the ring below, and therefore what
+# extension 0 means.
+#
+# "crossing" puts each stub's foot on its source arm's own outermost weave point
+# — the crossings you can see in the stitch — instead of a flat 52px setback.
+# Extension is then measured from a feature of the pattern rather than from a
+# constant, and the search reaches the same places with far less of it: on 2x2
+# LH k=[1,1] the second level settles at (90, 70) against (240, 230)/(290, 290),
+# with gaps 56.58/56.60 against 56.66/56.03. Level 1 is unaffected — the engines
+# build it themselves and nothing is welded onto it.
+ANCHOR = "crossing"
+
 
 def pick_extension_step(pairs, ext_max=MAX_PAIR_EXTENSION, budget=COMBO_BUDGET):
     """
@@ -354,6 +366,51 @@ def _retract_end(strand, distance):
     )
 
 
+def _segment_crossing(a, b):
+    """Parameter along `a` where it crosses `b`, or None if the segments miss."""
+    x1, y1 = a["start"]["x"], a["start"]["y"]
+    x2, y2 = a["end"]["x"], a["end"]["y"]
+    x3, y3 = b["start"]["x"], b["start"]["y"]
+    x4, y4 = b["end"]["x"], b["end"]["y"]
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-9:
+        return None
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
+    u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den
+    return t if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
+
+
+def crossing_anchors(source_by_name, fallback=RETRACT):
+    """
+    How far to pull each arm of a ring back so its end lands on its own OUTERMOST
+    crossing with the other band — the ring's own weave points.
+
+    This is the anchor the extension search should start from: extension 0 puts
+    the new stub's foot on a crossing rather than at an arbitrary flat setback,
+    so the extension the search reports is measured from a feature of the
+    stitch instead of from a constant.
+
+    The two bands are read off the geometry as the ring's two direction
+    families, so this works at any level and for any k without relabel algebra.
+    An arm that crosses nothing keeps the flat fallback.
+    """
+    names = list(source_by_name)
+    if len(names) < 4 or len(names) % 2:
+        return {}
+    band_a, band_b, _ = _split_direction_families(source_by_name, names)
+
+    anchors = {}
+    for mine, others in ((band_a, band_b), (band_b, band_a)):
+        for name in mine:
+            arm = source_by_name[name]
+            ts = [t for other in others
+                  if (t := _segment_crossing(arm, source_by_name[other])) is not None]
+            length = math.hypot(arm["end"]["x"] - arm["start"]["x"],
+                                arm["end"]["y"] - arm["start"]["y"])
+            anchors[name] = length * (1.0 - max(ts)) if ts else fallback
+    return anchors
+
+
 def _extend_past(start, target, extension):
     """Point `extension` px beyond `target` on the ray start -> target."""
     dx = target["x"] - start["x"]
@@ -417,7 +474,7 @@ def _make_mask(v_strand, layer_name, set_number, first_strand, second_strand):
 
 def add_continuation_level(strands, m, n, k, direction, hand, level,
                            k_prev=None, retract=RETRACT, tail_offset=TAIL_OFFSET,
-                           verbose=True):
+                           anchor=ANCHOR, verbose=True):
     """
     Grow one continuation level onto an existing (ideally already aligned) ring.
 
@@ -431,8 +488,12 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         level:        1-based level being built (>= 2 here; level 1 is the
                       engines' own generate_json).
         k_prev:       the k that produced the source ring. Required for level >= 2.
-        retract:      how far each source tail is pulled back before the weld.
+        retract:      flat setback, used when `anchor="flat"` and as the fallback
+                      for an arm that crosses nothing.
         tail_offset:  how far past the paired point the new tail runs.
+        anchor:       `"crossing"` welds each new stub at its source arm's own
+                      outermost weave point, so extension 0 sits on a crossing;
+                      `"flat"` uses `retract` for every arm.
 
     Returns:
         (all_strands, info) where info carries the relabel maps, the new strand
@@ -469,8 +530,9 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         name: {"start": dict(s["start"]), "end": dict(s["end"])}
         for name, s in source_by_name.items()
     }
+    anchors = crossing_anchors(source_by_name, retract) if anchor == "crossing" else {}
     for real_name in real_to_virtual:
-        _retract_end(source_by_name[real_name], retract)
+        _retract_end(source_by_name[real_name], anchors.get(real_name, retract))
 
     note = None
     if level > 1 and k == m + n and n > m:
@@ -741,6 +803,26 @@ def _family_window(by_name, family):
     return mean - half, mean + 180.0 + half
 
 
+def _ring_crossings(virtual_list):
+    """
+    How many times the new ring's arms cross each other.
+
+    This is the one measure that catches a collapsed level. The gap test looks
+    inside a band and reads clean on a ring that has folded over — measured on
+    2x2 ks=[1,1,1], where the third level reports gaps of 56.47/56.60, as tight
+    as anything in the working range, on a ring carrying 8 of its 16 crossings.
+
+    A well-formed m x n ring has exactly (2m)(2n): every arm crosses every arm
+    of the other band once and none of its own, because a band's arms are
+    parallel. So the count is both the health check and the target.
+    """
+    arms = [s for s in virtual_list
+            if s.get("type") == "AttachedStrand"
+            and s.get("layer_name", "").endswith(("_4", "_5"))]
+    return sum(1 for i, a in enumerate(arms) for b in arms[i + 1:]
+               if _segment_crossing(a, b) is not None)
+
+
 def _plan_family_rescue(virtual_list, h_order, v_order):
     """
     Work out the direction-family split for a level, from the ring as it stands
@@ -906,104 +988,104 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         print(f"\n--- LEVEL {level} alignment (k={k}, {direction}, mode={angle_mode}, "
               f"escalate={escalate_extension}) ---")
 
-    # Planned from the untouched ring, so the H rescue and the V rescue agree on
-    # the split even though the H search moves arms before V runs.
+    # Planned from the untouched ring, so both searches in an attempt agree on the
+    # split even though the H search moves arms before V runs.
     rescue = _plan_family_rescue(virtual_list, h_order, v_order)
+    expected_crossings = len(h_order) * len(v_order)
 
-    def forced_sets():
-        """Present the direction families to the engine as its k-based sets."""
-        plan = rescue
-        return (set(plan["h_order"]), list(plan["h_order"]),
-                set(plan["v_order"]), list(plan["v_order"]))
-
-    def align_h(ceiling, step, window=None):
-        lo, hi = window if window else (None, None)
-        return engine.align_horizontal_strands_parallel(
-            virtual_list, n,
-            angle_step_degrees=angle_step_degrees,
-            max_extension=max_extension,
-            strand_width=strand_width,
-            custom_angle_min=lo, custom_angle_max=hi,
-            max_pair_extension=ceiling,
-            pair_extension_step=step,
-            m=m, k=k, direction=direction,
-            use_gpu=use_gpu,
-            angle_mode=angle_mode,
-        )
-
-    def align_v(ceiling, step, window=None):
-        lo, hi = window if window else (None, None)
-        return engine.align_vertical_strands_parallel(
-            virtual_list, n, m,
-            angle_step_degrees=angle_step_degrees,
-            max_extension=max_extension,
-            strand_width=strand_width,
-            custom_angle_min=lo, custom_angle_max=hi,
-            max_pair_extension=ceiling,
-            pair_extension_step=step,
-            k=k, direction=direction,
-            use_gpu=use_gpu,
-            angle_mode=angle_mode,
-        )
-
-    def with_rescue(align, result, settings, pairs, label):
+    def attempt(plan):
         """
-        Retry a group that found nothing, using the direction families.
-
-        Only a group that failed outright is retried: a fallback still means the
-        engine reached a real configuration and merely could not land the gaps,
-        while `success == False` with no fallback means it never found one. The
-        rescue is therefore invisible to every level that currently works.
+        Align the level once, either with the engine's k-based groups (plan None)
+        or with the direction families, and report the ring it produced.
         """
-        if rescue is None or result.get("success"):
-            return result, settings
+        working, back = _build_virtual_view(strands, level_info, level)
 
-        window = rescue["h_window"] if label == "H" else rescue["v_window"]
-        order = rescue["h_order"] if label == "H" else rescue["v_order"]
-        if verbose:
-            print(f"    {label}: no solution in the k-based group "
-                  f"(fan {rescue['k_fan']:.1f} deg) — retrying on the direction "
-                  f"family {order} (fan {rescue['family_fan']:.1f} deg, window "
-                  f"{window[0]:.1f} to {window[1]:.1f} deg)")
+        def align_h(ceiling, step, window):
+            lo, hi = window if window else (None, None)
+            return engine.align_horizontal_strands_parallel(
+                working, n,
+                angle_step_degrees=angle_step_degrees,
+                max_extension=max_extension,
+                strand_width=strand_width,
+                custom_angle_min=lo, custom_angle_max=hi,
+                max_pair_extension=ceiling,
+                pair_extension_step=step,
+                m=m, k=k, direction=direction,
+                use_gpu=use_gpu,
+                angle_mode=angle_mode,
+            )
 
-        original = engine._build_k_based_strand_sets
-        engine._build_k_based_strand_sets = lambda *a, **kw: forced_sets()
+        def align_v(ceiling, step, window):
+            lo, hi = window if window else (None, None)
+            return engine.align_vertical_strands_parallel(
+                working, n, m,
+                angle_step_degrees=angle_step_degrees,
+                max_extension=max_extension,
+                strand_width=strand_width,
+                custom_angle_min=lo, custom_angle_max=hi,
+                max_pair_extension=ceiling,
+                pair_extension_step=step,
+                k=k, direction=direction,
+                use_gpu=use_gpu,
+                angle_mode=angle_mode,
+            )
+
+        if plan is None:
+            orders = (list(h_order), list(v_order))
+            windows = (None, None)
+            restore = None
+        else:
+            orders = (plan["h_order"], plan["v_order"])
+            windows = (plan["h_window"], plan["v_window"])
+            forced = (set(orders[0]), list(orders[0]), set(orders[1]), list(orders[1]))
+            restore = engine._build_k_based_strand_sets
+            engine._build_k_based_strand_sets = lambda *a, **kw: forced
+
         try:
-            retry, retry_settings = _search_group(
-                lambda ceiling, step: align(ceiling, step, window),
-                max(len(order) // 2, 1), max_pair_extension, pair_extension_step,
-                escalate_extension, verbose, f"{label}*")
+            results, settings = [], []
+            for align, order, window, label in ((align_h, orders[0], windows[0], "H"),
+                                                (align_v, orders[1], windows[1], "V")):
+                res, sett = _search_group(
+                    lambda ceiling, step, _a=align, _w=window: _a(ceiling, step, _w),
+                    max((len(order) + 1) // 2, 1), max_pair_extension,
+                    pair_extension_step, escalate_extension, verbose,
+                    label if plan is None else f"{label}*")
+                if plan is not None:
+                    sett["rescued"] = True
+                    sett["family"] = list(order)
+                    sett["window"] = [window[0], window[1]]
+                if res.get("success") or res.get("is_fallback"):
+                    working = engine.apply_parallel_alignment(working, res)
+                results.append(res)
+                settings.append(sett)
         finally:
-            engine._build_k_based_strand_sets = original
+            if restore is not None:
+                engine._build_k_based_strand_sets = restore
 
-        if not retry.get("success"):
+        return {"h": results[0], "v": results[1],
+                "h_settings": settings[0], "v_settings": settings[1],
+                "virtual_list": working, "back_map": back,
+                "crossings": _ring_crossings(working)}
+
+    chosen = attempt(None)
+    if rescue is not None and chosen["crossings"] < expected_crossings:
+        if verbose:
+            print(f"    k-based groups (fan {rescue['k_fan']:.1f} deg) gave a ring with "
+                  f"{chosen['crossings']}/{expected_crossings} crossings — retrying on "
+                  f"the direction families (fan {rescue['family_fan']:.1f} deg)")
+        alt = attempt(rescue)
+        if alt["crossings"] > chosen["crossings"]:
             if verbose:
-                print(f"    {label}: rescue found no solution either, keeping the "
-                      f"original result")
-            return result, settings
+                print(f"    direction families gave {alt['crossings']}"
+                      f"/{expected_crossings} — taking them")
+            chosen = alt
+        elif verbose:
+            print(f"    direction families gave {alt['crossings']}"
+                  f"/{expected_crossings} — keeping the k-based result")
 
-        retry_settings["rescued"] = True
-        retry_settings["family"] = list(order)
-        retry_settings["window"] = [window[0], window[1]]
-        return retry, retry_settings
-
-    h_result, h_settings = _search_group(
-        lambda ceiling, step: align_h(ceiling, step),
-        h_pairs, max_pair_extension, pair_extension_step,
-        escalate_extension, verbose, "H")
-    h_result, h_settings = with_rescue(align_h, h_result, h_settings, h_pairs, "H")
-
-    if h_result.get("success") or h_result.get("is_fallback"):
-        virtual_list = engine.apply_parallel_alignment(virtual_list, h_result)
-
-    v_result, v_settings = _search_group(
-        lambda ceiling, step: align_v(ceiling, step),
-        v_pairs, max_pair_extension, pair_extension_step,
-        escalate_extension, verbose, "V")
-    v_result, v_settings = with_rescue(align_v, v_result, v_settings, v_pairs, "V")
-
-    if v_result.get("success") or v_result.get("is_fallback"):
-        virtual_list = engine.apply_parallel_alignment(virtual_list, v_result)
+    h_result, v_result = chosen["h"], chosen["v"]
+    h_settings, v_settings = chosen["h_settings"], chosen["v_settings"]
+    virtual_list, back_map = chosen["virtual_list"], chosen["back_map"]
 
     for v_strand in virtual_list:
         real = back_map.get(v_strand["layer_name"])
