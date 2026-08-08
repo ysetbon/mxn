@@ -27,38 +27,63 @@ from ui_utils import _get_active_strands
 
 
 def audit(strands, level):
-    """(across, within, masks, stray) for the ring this level produced."""
+    """(across, within, masks, stray, broken) for the ring this level produced.
+
+    `broken` counts arms whose crossings do not alternate over/under. A mask
+    forces its `first_selected_strand` over; an unmasked crossing goes to
+    whichever arm is drawn later. Masks landing on real crossings is necessary
+    but not sufficient — the unmasked half depends on the arms' draw order, and
+    a stale order breaks the weave without moving a single mask.
+    """
     _, _, dst_a, dst_b = NX.level_suffixes(level)
     arms = [s for s in strands if s.get("type") == "AttachedStrand"
             and s["layer_name"].endswith((f"_{dst_a}", f"_{dst_b}"))]
     if len(arms) < 4:
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
     by_name = {s["layer_name"]: s for s in arms}
     band_a, _band_b, _fan = NX._split_direction_families(by_name, list(by_name))
     band_a = set(band_a)
 
+    masks = [s for s in strands if s.get("type") == "MaskedStrand"
+             and NX._is_level_mask(s.get("layer_name", ""), dst_a, dst_b)]
+    masked_over = {frozenset((s.get("first_selected_strand"),
+                              s.get("second_selected_strand"))):
+                   s.get("first_selected_strand") for s in masks}
+    draw_index = {s["layer_name"]: i for i, s in enumerate(strands)}
+
     across = within = 0
     crossing_pairs = set()
+    along = {a["layer_name"]: [] for a in arms}
     for i, a in enumerate(arms):
         for b in arms[i + 1:]:
             if NX._segment_crossing(a, b) is None:
                 continue
-            crossing_pairs.add(frozenset((a["layer_name"], b["layer_name"])))
-            if (a["layer_name"] in band_a) == (b["layer_name"] in band_a):
+            an, bn = a["layer_name"], b["layer_name"]
+            crossing_pairs.add(frozenset((an, bn)))
+            if (an in band_a) == (bn in band_a):
                 within += 1
             else:
                 across += 1
+            over = masked_over.get(frozenset((an, bn)))
+            if over is None:
+                over = an if draw_index[an] > draw_index[bn] else bn
+            along[an].append((NX._segment_crossing(a, b), over == an))
+            along[bn].append((NX._segment_crossing(b, a), over == bn))
 
-    masks = [s for s in strands if s.get("type") == "MaskedStrand"
-             and NX._is_level_mask(s.get("layer_name", ""), dst_a, dst_b)]
+    broken = 0
+    for seq in along.values():
+        seq.sort()
+        if any(seq[i][1] == seq[i + 1][1] for i in range(len(seq) - 1)):
+            broken += 1
+
     stray = sum(1 for s in masks
                 if frozenset((s.get("first_selected_strand"),
                               s.get("second_selected_strand"))) not in crossing_pairs)
-    return across, within, len(masks), stray
+    return across, within, len(masks), stray, broken
 
 
 def describe(result, strands, level, k, expected):
-    across, within, n_masks, stray = audit(strands, level)
+    across, within, n_masks, stray, broken = audit(strands, level)
 
     def state(axis):
         r = result[axis]
@@ -66,6 +91,8 @@ def describe(result, strands, level, k, expected):
 
     search = result["search"]
     applied = []
+    if search["horizontal"].get("seeded") or search["vertical"].get("seeded"):
+        applied.append("seeded")
     if search["horizontal"].get("rescued") or search["vertical"].get("rescued"):
         applied.append("regrouped")
     if search["horizontal"].get("mirrored") or search["vertical"].get("mirrored"):
@@ -73,14 +100,14 @@ def describe(result, strands, level, k, expected):
     if search.get("masks_relaid"):
         applied.append("masks re-laid")
 
-    healthy = across == expected and not within and not stray
+    healthy = across == expected and not within and not stray and not broken
     print(f"  L{level} k={k:<3d}{state('horizontal')}/{state('vertical'):<4s} "
           f"gap {result['horizontal'].get('average_gap', 0):7.2f}/"
           f"{result['vertical'].get('average_gap', 0):<7.2f} "
           f"ext {tuple(result['horizontal'].get('pair_extensions') or ())}"
           f"{tuple(result['vertical'].get('pair_extensions') or ())}")
     print(f"        across {across:>3d}/{expected}  within {within:>2d}  "
-          f"masks {n_masks:>2d}  stray {stray:>2d}   "
+          f"masks {n_masks:>2d}  stray {stray:>2d}  broken {broken:>2d}   "
           f"{', '.join(applied) or 'k-based groups'}   "
           f"{'WEAVE' if healthy else '<<< NOT A WEAVE'}")
     sys.stdout.flush()
@@ -91,7 +118,33 @@ def describe(result, strands, level, k, expected):
             "ext": [list(result["horizontal"].get("pair_extensions") or ()),
                     list(result["vertical"].get("pair_extensions") or ())],
             "across": across, "within": within, "masks": n_masks, "stray": stray,
-            "applied": applied, "healthy": healthy}
+            "broken": broken, "applied": applied, "healthy": healthy}
+
+
+def level1_extensions(engine, m, n, k, hand, direction):
+    """
+    The extensions level 1 settles on for this k, on a fresh starting stitch.
+
+    A deeper level with rotation k is, in its virtual frame, the same problem
+    level 1 solves for that k — so level 1's own combo is the natural first
+    seed, and it keeps the arms short: without it the full search on 2x2
+    [1, 1, -1] level 3 picks (20, 190) where level 1's k=-1 answer (0, 70)
+    is just as valid.
+    """
+    if k == 0:
+        return None
+    strands = _get_active_strands(
+        json.loads(engine.generate_json(m, n, k, direction)))
+    r2v, v2r = NX._identity_relabel(hand, m, n)
+    res = NX.align_continuation_level(
+        strands, m, n, k, direction, hand, 1,
+        {"level": 1, "k": k, "real_to_virtual": r2v, "virtual_to_real": v2r,
+         "new_masks": [s for s in strands if s.get("type") == "MaskedStrand"
+                       and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]},
+        verbose=False)
+    h = tuple(res["horizontal"].get("pair_extensions") or ())
+    v = tuple(res["vertical"].get("pair_extensions") or ())
+    return (h, v) if h and v else None
 
 
 def run(m, n, ks, hand, direction, render, out_dir):
@@ -122,20 +175,38 @@ def run(m, n, ks, hand, direction, render, out_dir):
         snapshot = [dict(s) for s in strands]
     rows.append(describe(result, snapshot, 1, ks[0], expected))
 
+    # Every settled level donates its combos as a seed for the next ones,
+    # most recent first — deeper rings tend to land on combos already seen.
+    # But the FIRST seed for a level is level 1's own solution for that
+    # level's k: in the virtual frame a level-L twist at k is the same problem
+    # level 1 solves at k, and its combo keeps the arms short.
+    seeds = [(rows[0]["ext"][0], rows[0]["ext"][1])]
+    level1_for_k = {ks[0]: (tuple(rows[0]["ext"][0]), tuple(rows[0]["ext"][1]))}
+
+    prev_v2r = virtual_to_real
     for level in range(2, len(ks) + 1):
+        k_level = ks[level - 1]
         with contextlib.redirect_stdout(io.StringIO()):
+            if k_level not in level1_for_k:
+                level1_for_k[k_level] = level1_extensions(
+                    engine, m, n, k_level, hand, direction)
+            k_seed = level1_for_k[k_level]
+            level_seeds = ([k_seed] if k_seed else []) + list(reversed(seeds))
             strands, info = NX.add_continuation_level(
-                strands, m, n, ks[level - 1], direction, hand, level,
-                k_prev=ks[level - 2], verbose=False)
-            result = NX.align_continuation_level(
-                strands, m, n, ks[level - 1], direction, hand, level, info,
+                strands, m, n, k_level, direction, hand, level,
+                k_prev=ks[level - 2], prev_virtual_to_real=prev_v2r,
                 verbose=False)
+            prev_v2r = info["virtual_to_real"]
+            result = NX.align_continuation_level(
+                strands, m, n, k_level, direction, hand, level, info,
+                seed_extensions=level_seeds, verbose=False)
             ordinal = {2: "2nd", 3: "3rd"}.get(level, f"{level}th")
             stages.append({"level": level, "k": ks[level - 1],
                            "label": f"{ordinal} twist",
                            "json": NX._snapshot_json(strands)})
             snapshot = [dict(s) for s in strands]
         rows.append(describe(result, snapshot, level, ks[level - 1], expected))
+        seeds.append((rows[-1]["ext"][0], rows[-1]["ext"][1]))
 
     report = {"m": m, "n": n, "hand": hand, "direction": direction, "ks": ks,
               "expected": expected, "seconds": round(time.time() - started, 1),

@@ -280,7 +280,8 @@ def build_symbolic_pairings(hand, m, n, k, direction):
 # Virtual relabel: previous level's ring -> canonical starting stitch
 # ---------------------------------------------------------------------------
 
-def build_level_relabel(hand, m, n, k_prev, direction, level):
+def build_level_relabel(hand, m, n, k_prev, direction, level,
+                        prev_virtual_to_real=None):
     """
     Map the real strand names of level `level`'s source ring onto canonical
     starting-stitch names.
@@ -288,17 +289,39 @@ def build_level_relabel(hand, m, n, k_prev, direction, level):
     `level` is the level being BUILT (>= 2); `k_prev` is the k that produced the
     source ring, i.e. the k of level `level - 1`.
 
+    `prev_virtual_to_real` is the PREVIOUS level's virtual_to_real map, and it
+    matters from level 3 on. The k_prev order lists name strands in the previous
+    level's VIRTUAL frame; the real arm playing such a role is that frame's real
+    parent, bumped one level — not simply the same set re-suffixed. With k = +1
+    the level-2 relabel swaps the suffix roles inside every horizontal set
+    (real 1_5 plays virtual 1_2), so a level-3 relabel built without the
+    composition reverses each horizontal pair's spatial order: the k-based
+    groups then span ~55 deg (an impossible alignment request), the rescue
+    re-splits them into set-aligned bands, and the level aligns into the shape
+    of a k=+1 twist regardless of its own k. Composing through the previous
+    map keeps the virtual ring an honest starting stitch, so the engine's own
+    k machinery — grouping, pairing and masks — applies at any depth exactly
+    as it does at level 1. Omitting it falls back to the direct re-suffix,
+    which is correct only for level 2 (where the previous map is the identity).
+
     Returns:
         (real_to_virtual, virtual_to_real) dicts of layer_name -> layer_name.
     """
     engine = get_engine(hand)
     src_a, src_b, _, _ = level_suffixes(level)
+    prev_src_a, prev_src_b, _, _ = level_suffixes(level - 1)
 
     eff_dir = engine._get_effective_direction_for_max_k_special(m, n, k_prev, direction)
     h_prev = engine.get_horizontal_order_k(m, n, k_prev, eff_dir)
     v_prev = engine.get_vertical_order_k(m, n, k_prev, eff_dir)
 
     def to_source(label):
+        if prev_virtual_to_real is not None:
+            parent_real = prev_virtual_to_real.get(label)
+            if parent_real is None:
+                raise KeyError(f"level {level}: previous relabel has no entry "
+                               f"for {label!r}")
+            return _bump_suffix(parent_real, prev_src_a, prev_src_b, src_a, src_b)
         set_part, suffix = label.split("_")
         return f"{set_part}_{src_a if suffix == '2' else src_b}"
 
@@ -473,7 +496,8 @@ def _make_mask(v_strand, layer_name, set_number, first_strand, second_strand):
 # ---------------------------------------------------------------------------
 
 def add_continuation_level(strands, m, n, k, direction, hand, level,
-                           k_prev=None, retract=RETRACT, tail_offset=TAIL_OFFSET,
+                           k_prev=None, prev_virtual_to_real=None,
+                           retract=RETRACT, tail_offset=TAIL_OFFSET,
                            anchor=None, verbose=True):
     """
     Grow one continuation level onto an existing (ideally already aligned) ring.
@@ -488,6 +512,12 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         level:        1-based level being built (>= 2 here; level 1 is the
                       engines' own generate_json).
         k_prev:       the k that produced the source ring. Required for level >= 2.
+        prev_virtual_to_real:
+                      the previous level's virtual_to_real map, composed into
+                      this level's relabel (see `build_level_relabel`).
+                      Required in practice from level 3 on; without it the
+                      relabel assumes the previous map was the identity, which
+                      only level 2 can.
         retract:      flat setback, used when `anchor="flat"` and as the fallback
                       for an arm that crosses nothing.
         tail_offset:  how far past the paired point the new tail runs.
@@ -511,7 +541,9 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
     else:
         if k_prev is None:
             raise ValueError("k_prev is required for level >= 2")
-        real_to_virtual, virtual_to_real = build_level_relabel(hand, m, n, k_prev, direction, level)
+        real_to_virtual, virtual_to_real = build_level_relabel(
+            hand, m, n, k_prev, direction, level,
+            prev_virtual_to_real=prev_virtual_to_real)
 
     source_by_name = {
         s["layer_name"]: s
@@ -946,6 +978,9 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
     Band roles and spatial order are conventions we cannot read off the families
     directly, so every combination is tried and the one that puts all eight
     masks on real crossings wins. If none does, the masks are left alone.
+
+    Returns the winning `(v_seq, h_seq)` bands (virtual names) so the caller
+    can re-lay the draw order to match, or None when nothing was touched.
     """
     arms = {s["layer_name"]: s for s in virtual_list
             if s.get("type") == "AttachedStrand"
@@ -964,7 +999,7 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
                 real_to_virtual.get(m.get("second_selected_strand")))
                for m in masks]
     if all(v and h for v, h in current) and not stray(current):
-        return False
+        return None
 
     # Several arrangements put every mask on a real crossing while covering a
     # DIFFERENT half of the checkerboard, which inverts who goes over at those
@@ -986,21 +1021,21 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
                          + _order_disagreement(h_seq, h_order),
                          roles != "as planned")
                 if best is None or score < best[0]:
-                    best = (score, pairs, roles, v_rev, h_rev)
+                    best = (score, pairs, v_seq, h_seq, roles, v_rev, h_rev)
 
     if best is None or best[0][0]:
         if verbose:
             print(f"    masks: no re-pairing puts them all on crossings "
                   f"({'none fit' if best is None else str(best[0][0]) + ' stray'}), "
                   f"leaving them")
-        return False
+        return None
 
-    (_stray, disagree, _swapped), pairs, roles, v_rev, h_rev = best
+    (_stray, disagree, _swapped), pairs, v_seq, h_seq, roles, v_rev, h_rev = best
     for mask, (v_virtual, h_virtual) in zip(masks, pairs):
         v_real = back_map.get(v_virtual)
         h_real = back_map.get(h_virtual)
         if v_real is None or h_real is None:
-            return False
+            return None
         mask["first_selected_strand"] = v_real["layer_name"]
         mask["second_selected_strand"] = h_real["layer_name"]
         mask["layer_name"] = f"{v_real['layer_name']}_{h_real['layer_name']}"
@@ -1016,6 +1051,44 @@ def _relay_masks(masks, virtual_list, back_map, plan, k, h_order, v_order, verbo
               f"real crossings ({roles}"
               f"{', V reversed' if v_rev else ''}{', H reversed' if h_rev else ''}, "
               f"{disagree} order disagreements with the engine)")
+    return v_seq, h_seq
+
+
+def _relay_draw_order(strands, bands, back_map, verbose):
+    """
+    Re-lay the arms' draw order to match the re-laid masks.
+
+    Only half of a ring's crossings carry a mask; the other half rely on every
+    arm of the horizontal band being drawn AFTER every arm of the vertical
+    band, which `add_continuation_level` guarantees by appending the ring as
+    v-order then h-order. A regrouped ring's bands are a different partition of
+    the same arms, so that guarantee goes stale: measured on 2x2 ks=[1,1,-1]
+    at level 3, six of the eight arms broke over/under alternation while every
+    mask sat on a real crossing — the masked half was right and the unmasked
+    half resolved by the stale k-based list order.
+
+    Reordering the ring's own slots in the strand list restores the level-1
+    convention. Nothing outside the ring moves, so lower levels and the
+    level's masks (which sit after the arms) keep their draw order.
+    """
+    v_seq, h_seq = bands
+    ordered = []
+    for virtual in list(v_seq) + list(h_seq):
+        real = back_map.get(virtual)
+        if real is None:
+            return False
+        ordered.append(real["layer_name"])
+    wanted = set(ordered)
+    slots = [i for i, s in enumerate(strands)
+             if s.get("type") == "AttachedStrand"
+             and s.get("layer_name") in wanted]
+    by_name = {strands[i]["layer_name"]: strands[i] for i in slots}
+    if len(slots) != len(ordered) or set(by_name) != wanted:
+        return False
+    for slot, name in zip(slots, ordered):
+        strands[slot] = by_name[name]
+    if verbose:
+        print(f"    draw order: ring re-laid to its bands, {ordered}")
     return True
 
 
@@ -1089,10 +1162,18 @@ def _mirror_extensions(attempt, chosen, plan, expected, sides, verbose):
     # at level 3, where H's (10, 30, 20) is never a valid configuration for V. So
     # if the near band cannot donate, the far band tries, since a symmetric
     # stitch on the far band's combo still beats two bands that disagree.
+    #
+    # BOTH sides are pinned to the donor combo. Pinning only the receiver and
+    # letting the donor re-search sounds equivalent -- the donor's own optimum
+    # IS the combo -- but the re-search runs on the full grid, not whatever
+    # bounded grid the donor's result came from, and can wander: measured on
+    # 2x2 [1,1,-1,-1,-1,-1,-1] at level 7, where H's re-search left its seeded
+    # (50, 40) for a long-armed (20, 170) while V sat pinned at (50, 40), and
+    # the "mirrored" level shipped with two different bands.
     if max(v_ext) <= max(h_ext):
-        order = [(v_ext, (v_ext, None), "V -> H"), (h_ext, (None, h_ext), "H -> V")]
+        order = [(v_ext, (v_ext, v_ext), "V -> H"), (h_ext, (h_ext, h_ext), "H -> V")]
     else:
-        order = [(h_ext, (None, h_ext), "H -> V"), (v_ext, (v_ext, None), "V -> H")]
+        order = [(h_ext, (h_ext, h_ext), "H -> V"), (v_ext, (v_ext, v_ext), "V -> H")]
 
     if verbose:
         print(f"    bands disagree: H{h_ext} V{v_ext} — trying "
@@ -1191,7 +1272,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                              max_pair_extension=MAX_PAIR_EXTENSION,
                              pair_extension_step=None, use_gpu=False,
                              angle_mode=ANGLE_MODE, escalate_extension=None,
-                             mirror_sides=None, verbose=True):
+                             mirror_sides=None, seed_extensions=None,
+                             verbose=True):
     """
     Run the engine's parallel alignment on one continuation level.
 
@@ -1209,6 +1291,19 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     and OFF for level 1: every ring past the first sits further out and needs
     longer arms than the sheet's 200px ceiling allows, while level 1 must keep
     reproducing the published twist exactly. Pass True/False to force it.
+
+    `seed_extensions` warm-starts the search from earlier levels: a list of
+    `(h_combo, v_combo)` pairs, most promising first — in practice the combos
+    levels 1..L-1 settled on. An aligned ring is geometrically another
+    starting-stitch ring, so deeper levels tend to land on (or next to) the
+    combos already seen: measured on 2x2 ks=[1,1,-1], level 3 settles on the
+    exact (80, 60) the first twist uses. Each seed is tried as a pinned search
+    (grid sized to contain the combo, the engine's own angle window recomputed
+    for it), first on the k-based groups, then on the direction families; the
+    first seed whose ring is complete wins and the full escalation search is
+    skipped. If no seed produces a complete ring, the normal search runs
+    unchanged, so seeding can speed a level up but never change what is
+    reachable.
 
     Returns:
         dict with the horizontal and vertical alignment results, plus the
@@ -1239,13 +1334,15 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     rescue = _plan_family_rescue(virtual_list, h_order, v_order)
     expected_crossings = len(h_order) * len(v_order)
 
-    def attempt(plan, force=(None, None)):
+    def attempt(plan, force=(None, None), bound=None):
         """
         Align the level once, either with the engine's k-based groups (plan None)
         or with the direction families, and report the ring it produced.
 
         `force` pins one side's extension combo instead of letting it choose —
-        see `_mirror_extensions`.
+        see `_mirror_extensions`. `bound` is `(ceiling, step)`: run one search
+        on that small fixed grid instead of the escalating schedule — used by
+        seeding to look NEAR a known combo without letting the arms run long.
         """
         working, back = _build_virtual_view(strands, level_info, level)
 
@@ -1298,16 +1395,24 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                     (align_h, orders[0], windows[0], force[0], "H"),
                     (align_v, orders[1], windows[1], force[1], "V")):
                 pairs = max((len(order) + 1) // 2, 1)
-                if pin is None:
+                if pin is not None:
+                    res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
+                    if res is None:
+                        return None
+                elif bound is not None:
+                    b_ceiling, b_step = bound
+                    res = align(b_ceiling, b_step, window)
+                    if not res.get("success"):
+                        return None
+                    sett = {"ceiling": b_ceiling, "step": b_step, "pairs": pairs,
+                            "combos": (b_ceiling // b_step + 1) ** pairs,
+                            "attempts": 1, "pinned": False, "bounded": True}
+                else:
                     res, sett = _search_group(
                         lambda ceiling, step, _a=align, _w=window: _a(ceiling, step, _w),
                         pairs, max_pair_extension, pair_extension_step,
                         escalate_extension, verbose,
                         label if plan is None else f"{label}*")
-                else:
-                    res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
-                    if res is None:
-                        return None
                 if plan is not None:
                     sett["rescued"] = True
                     sett["family"] = list(order)
@@ -1325,9 +1430,48 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 "virtual_list": working, "back_map": back,
                 "crossings": _ring_crossings(working)}
 
-    chosen = attempt(None)
-    plan_used = None
-    if rescue is not None and chosen["crossings"] < expected_crossings:
+    chosen, plan_used = None, None
+    seen_seeds = set()
+    for h_combo, v_combo in (seed_extensions or []):
+        h_combo = tuple(int(v) for v in (h_combo or ()))
+        v_combo = tuple(int(v) for v in (v_combo or ()))
+        if (len(h_combo) != h_pairs or len(v_combo) != v_pairs
+                or (h_combo, v_combo) in seen_seeds):
+            continue
+        seen_seeds.add((h_combo, v_combo))
+        # A drifted ring rarely repeats a combo exactly, so a failed pin falls
+        # back to one small search AROUND the seed: ceiling just above its
+        # largest value, so a long-armed optimum is simply out of reach.
+        near = (int(-(-(max(h_combo + v_combo) + 30) // 10) * 10), 10)
+        for plan in ((None, rescue) if rescue is not None else (None,)):
+            for how, kwargs in (("exactly", {"force": (h_combo, v_combo)}),
+                                ("nearby", {"bound": near})):
+                trial = attempt(plan, **kwargs)
+                if trial is None or trial["crossings"] < expected_crossings:
+                    continue
+                # `_pinned_search` labels its settings for the mirror; relabel
+                # them so a seeded level does not read as a mirrored one.
+                for sett in (trial["h_settings"], trial["v_settings"]):
+                    sett["mirrored"] = False
+                    sett["seeded"] = True
+                if verbose:
+                    got_h = tuple(trial["h"].get("pair_extensions") or ())
+                    got_v = tuple(trial["v"].get("pair_extensions") or ())
+                    print(f"    seed H{h_combo} V{v_combo} lands {how} "
+                          f"(H{got_h} V{got_v}) with a complete ring on the "
+                          f"{'direction families' if plan is not None else 'k-based groups'}, "
+                          f"skipping the full search")
+                chosen, plan_used = trial, plan
+                break
+            if chosen is not None:
+                break
+        if chosen is not None:
+            break
+
+    if chosen is None:
+        chosen = attempt(None)
+    if rescue is not None and plan_used is None \
+            and chosen["crossings"] < expected_crossings:
         if verbose:
             print(f"    k-based groups (fan {rescue['k_fan']:.1f} deg) gave a ring with "
                   f"{chosen['crossings']}/{expected_crossings} crossings — retrying on "
@@ -1357,11 +1501,17 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
             _copy_geometry(v_strand, real)
 
     # A regrouped ring has different bands from the ones the masks were built
-    # against, so re-pair them before they take their geometry.
+    # against, so re-pair them before they take their geometry — and re-lay
+    # the arms' draw order, because the unmasked half of the crossings comes
+    # out right only when the whole h-band draws over the whole v-band.
     relaid = False
     if plan_used is not None and level_info["new_masks"]:
-        relaid = _relay_masks(level_info["new_masks"], virtual_list, back_map,
-                              plan_used, k, list(h_order), list(v_order), verbose)
+        relaid_bands = _relay_masks(level_info["new_masks"], virtual_list,
+                                    back_map, plan_used, k,
+                                    list(h_order), list(v_order), verbose)
+        relaid = relaid_bands is not None
+        if relaid:
+            _relay_draw_order(strands, relaid_bands, back_map, verbose)
 
     # Masks copy the geometry of the vertical strand they sit on.
     by_name = {s["layer_name"]: s for s in strands}

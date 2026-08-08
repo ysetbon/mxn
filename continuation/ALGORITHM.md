@@ -24,11 +24,30 @@ The engines only know how to align a ring called `_4/_5` sitting on parents
 called `_2/_3`. So each level presents its source ring under those names, runs
 the untouched engine code, and copies the geometry back out.
 
-`build_level_relabel(hand, m, n, k_prev, direction, level)` builds the map. It
-works by pairing the previous level's k-based H/V order lists positionally
-against the canonical `k = 0` order lists — the previous level's order *is* the
-spatial order across each band, so position is the correct correspondence. With
-`k1 = 0` the map comes out as the identity, which is the sanity check.
+`build_level_relabel(hand, m, n, k_prev, direction, level, prev_virtual_to_real)`
+builds the map. It works by pairing the previous level's k-based H/V order lists
+positionally against the canonical `k = 0` order lists — the previous level's
+order *is* the spatial order across each band, so position is the correct
+correspondence. With `k1 = 0` the map comes out as the identity, which is the
+sanity check.
+
+**The map must be composed through the previous level's map.** The k_prev order
+lists name strands in the previous level's *virtual* frame; the real arm playing
+such a role is that frame's real parent, bumped one level — not simply the same
+set re-suffixed. With `k = +1` the level-2 relabel swaps the suffix roles inside
+every horizontal set (real `1_5` plays virtual `1_2`), so a level-3 relabel
+built without the composition reverses each horizontal pair's spatial order.
+That was the original level-3 failure: the k-based groups spanned ~55° (an
+impossible alignment request), the family rescue re-split them into set-aligned
+bands, and the level aligned into the shape of a `k = +1` twist regardless of
+its own `k` — visibly the wrong stitch, even when every audit number read clean.
+Composed, the virtual ring is an honest starting stitch at any depth: every
+level aligns natively on the k-based groups with the engine's own pairing and
+mask rule, level 3 of `[1, 1, −1]` comes out with the mixed-set bands a real
+`k = −1` twist has (compare level 1 at `k = −1`), and levels 4+ — previously
+"infeasible" — just work. Callers thread each level's `virtual_to_real` into
+the next `add_continuation_level`; omitting it falls back to the direct
+re-suffix, which is only correct for level 2.
 
 `_build_virtual_view` deep-copies the source ring and its children into that
 naming; `_copy_geometry` writes results back onto the real strands.
@@ -116,6 +135,35 @@ strand_width * 1.5]` = `[56, 69]`.
   it (`200 → 300 → 450 → 680 → 1020 → 1200`), stopping at the **first interior
   optimum**. It must not chase further: an over-wide grid lets a degenerate
   long-armed solution win the variance tie-break.
+
+### Seeding from earlier levels
+
+An aligned ring is geometrically another starting-stitch ring, so a level-L
+twist at rotation `k` is — in its virtual frame — the same problem level 1
+solves at that `k`. `align_continuation_level` therefore takes
+`seed_extensions`, a list of `(h_combo, v_combo)` pairs. The driver passes,
+first, **level 1's own solution for the level's k** (computed once per
+distinct k on a fresh starting stitch), then the chain's earlier winners, most
+recent first.
+
+Each seed is tried twice, first on the k-based groups, then on the direction
+families:
+
+1. **Exactly** — a pinned search at the seed's combo (grid sized to contain
+   it, the engine's angle window recomputed for it).
+2. **Nearby** — a drifted ring rarely repeats a combo exactly, so a failed pin
+   falls back to one small search around the seed: ceiling just above the
+   seed's largest value, step 10. The long-armed optima the escalating search
+   likes are simply out of reach of that grid.
+
+The first attempt whose ring is complete wins and the full escalation search
+is skipped. This is what keeps deep extensions at level-1 scale: on 2×2
+`[1, 1, −1]` the unseeded search sends level 3 to `(20, 190)`, while the seed
+built from level 1's `k = −1` answer `(0, 70)` lands `(40, 70)` — same weave,
+arms a third as long — and a six-level chain runs in ~6 s with every level in
+the 20–90px range. If no seed produces a complete ring the normal search runs
+unchanged, so seeding can only shorten and speed a level, never change what is
+reachable. A seeded level reports `seeded` in the audit's last column.
 
 ### The angle window
 
@@ -237,6 +285,18 @@ Two things matter beyond landing on crossings:
 If the existing masks already sit on real crossings, nothing is touched; if no
 arrangement scores zero stray, they are left alone rather than replaced with a
 guess.
+
+Re-laying the masks is only half the repair. Masks decide the masked half of
+the crossings; the **unmasked half** comes out right only because every arm of
+the horizontal band is drawn after every arm of the vertical band —
+`add_continuation_level` appends the ring as v-order then h-order. A regrouped
+ring's bands are a different partition of the same arms, so that draw order
+goes stale: on 2×2 `ks = [1, 1, −1]` at level 3, six of the eight arms broke
+over/under alternation while every mask sat on a real crossing. So
+`_relay_draw_order` reorders the ring's own slots in the strand list to the
+re-laid bands (v-band then h-band). Nothing outside the ring moves, and with
+both repairs the level-3 weave alternates `OuOu` on every arm — the same rule
+levels 1 and 2 follow.
 
 ## 10. Constants
 
