@@ -24,11 +24,30 @@ The engines only know how to align a ring called `_4/_5` sitting on parents
 called `_2/_3`. So each level presents its source ring under those names, runs
 the untouched engine code, and copies the geometry back out.
 
-`build_level_relabel(hand, m, n, k_prev, direction, level)` builds the map. It
-works by pairing the previous level's k-based H/V order lists positionally
-against the canonical `k = 0` order lists — the previous level's order *is* the
-spatial order across each band, so position is the correct correspondence. With
-`k1 = 0` the map comes out as the identity, which is the sanity check.
+`build_level_relabel(hand, m, n, k_prev, direction, level, prev_virtual_to_real)`
+builds the map. It works by pairing the previous level's k-based H/V order lists
+positionally against the canonical `k = 0` order lists — the previous level's
+order *is* the spatial order across each band, so position is the correct
+correspondence. With `k1 = 0` the map comes out as the identity, which is the
+sanity check.
+
+**The map must be composed through the previous level's map.** The k_prev order
+lists name strands in the previous level's *virtual* frame; the real arm playing
+such a role is that frame's real parent, bumped one level — not simply the same
+set re-suffixed. With `k = +1` the level-2 relabel swaps the suffix roles inside
+every horizontal set (real `1_5` plays virtual `1_2`), so a level-3 relabel
+built without the composition reverses each horizontal pair's spatial order.
+That was the original level-3 failure: the k-based groups spanned ~55° (an
+impossible alignment request), the family rescue re-split them into set-aligned
+bands, and the level aligned into the shape of a `k = +1` twist regardless of
+its own `k` — visibly the wrong stitch, even when every audit number read clean.
+Composed, the virtual ring is an honest starting stitch at any depth: every
+level aligns natively on the k-based groups with the engine's own pairing and
+mask rule, level 3 of `[1, 1, −1]` comes out with the mixed-set bands a real
+`k = −1` twist has (compare level 1 at `k = −1`), and levels 4+ — previously
+"infeasible" — just work. Callers thread each level's `virtual_to_real` into
+the next `add_continuation_level`; omitting it falls back to the direct
+re-suffix, which is only correct for level 2.
 
 `_build_virtual_view` deep-copies the source ring and its children into that
 naming; `_copy_geometry` writes results back onto the real strands.

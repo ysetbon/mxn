@@ -280,7 +280,8 @@ def build_symbolic_pairings(hand, m, n, k, direction):
 # Virtual relabel: previous level's ring -> canonical starting stitch
 # ---------------------------------------------------------------------------
 
-def build_level_relabel(hand, m, n, k_prev, direction, level):
+def build_level_relabel(hand, m, n, k_prev, direction, level,
+                        prev_virtual_to_real=None):
     """
     Map the real strand names of level `level`'s source ring onto canonical
     starting-stitch names.
@@ -288,17 +289,39 @@ def build_level_relabel(hand, m, n, k_prev, direction, level):
     `level` is the level being BUILT (>= 2); `k_prev` is the k that produced the
     source ring, i.e. the k of level `level - 1`.
 
+    `prev_virtual_to_real` is the PREVIOUS level's virtual_to_real map, and it
+    matters from level 3 on. The k_prev order lists name strands in the previous
+    level's VIRTUAL frame; the real arm playing such a role is that frame's real
+    parent, bumped one level — not simply the same set re-suffixed. With k = +1
+    the level-2 relabel swaps the suffix roles inside every horizontal set
+    (real 1_5 plays virtual 1_2), so a level-3 relabel built without the
+    composition reverses each horizontal pair's spatial order: the k-based
+    groups then span ~55 deg (an impossible alignment request), the rescue
+    re-splits them into set-aligned bands, and the level aligns into the shape
+    of a k=+1 twist regardless of its own k. Composing through the previous
+    map keeps the virtual ring an honest starting stitch, so the engine's own
+    k machinery — grouping, pairing and masks — applies at any depth exactly
+    as it does at level 1. Omitting it falls back to the direct re-suffix,
+    which is correct only for level 2 (where the previous map is the identity).
+
     Returns:
         (real_to_virtual, virtual_to_real) dicts of layer_name -> layer_name.
     """
     engine = get_engine(hand)
     src_a, src_b, _, _ = level_suffixes(level)
+    prev_src_a, prev_src_b, _, _ = level_suffixes(level - 1)
 
     eff_dir = engine._get_effective_direction_for_max_k_special(m, n, k_prev, direction)
     h_prev = engine.get_horizontal_order_k(m, n, k_prev, eff_dir)
     v_prev = engine.get_vertical_order_k(m, n, k_prev, eff_dir)
 
     def to_source(label):
+        if prev_virtual_to_real is not None:
+            parent_real = prev_virtual_to_real.get(label)
+            if parent_real is None:
+                raise KeyError(f"level {level}: previous relabel has no entry "
+                               f"for {label!r}")
+            return _bump_suffix(parent_real, prev_src_a, prev_src_b, src_a, src_b)
         set_part, suffix = label.split("_")
         return f"{set_part}_{src_a if suffix == '2' else src_b}"
 
@@ -473,7 +496,8 @@ def _make_mask(v_strand, layer_name, set_number, first_strand, second_strand):
 # ---------------------------------------------------------------------------
 
 def add_continuation_level(strands, m, n, k, direction, hand, level,
-                           k_prev=None, retract=RETRACT, tail_offset=TAIL_OFFSET,
+                           k_prev=None, prev_virtual_to_real=None,
+                           retract=RETRACT, tail_offset=TAIL_OFFSET,
                            anchor=None, verbose=True):
     """
     Grow one continuation level onto an existing (ideally already aligned) ring.
@@ -488,6 +512,12 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         level:        1-based level being built (>= 2 here; level 1 is the
                       engines' own generate_json).
         k_prev:       the k that produced the source ring. Required for level >= 2.
+        prev_virtual_to_real:
+                      the previous level's virtual_to_real map, composed into
+                      this level's relabel (see `build_level_relabel`).
+                      Required in practice from level 3 on; without it the
+                      relabel assumes the previous map was the identity, which
+                      only level 2 can.
         retract:      flat setback, used when `anchor="flat"` and as the fallback
                       for an arm that crosses nothing.
         tail_offset:  how far past the paired point the new tail runs.
@@ -511,7 +541,9 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
     else:
         if k_prev is None:
             raise ValueError("k_prev is required for level >= 2")
-        real_to_virtual, virtual_to_real = build_level_relabel(hand, m, n, k_prev, direction, level)
+        real_to_virtual, virtual_to_real = build_level_relabel(
+            hand, m, n, k_prev, direction, level,
+            prev_virtual_to_real=prev_virtual_to_real)
 
     source_by_name = {
         s["layer_name"]: s

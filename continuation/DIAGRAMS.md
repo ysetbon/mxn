@@ -15,8 +15,8 @@ One `k` per level. `--ks 1 1 -1` means: first twist at `k = 1`, second at
         across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
   L2 k=1  ok/ok  gap   56.58/56.60   ext (90, 70)(90, 70)
         across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
-  L3 k=-1 ok/ok  gap   56.48/56.43   ext (80, 60)(80, 60)
-        across  16/16  within  0  masks  8  stray  0  broken  0   regrouped, masks re-laid   WEAVE
+  L3 k=-1 ok/ok  gap   56.91/56.89   ext (20, 190)(20, 190)
+        across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
 ```
 
 Exit status is 0 only when every level is a weave, so it drops straight into a
@@ -102,6 +102,6 @@ done
 wait
 ```
 
-Rough costs on this container: 2×2 to level 3 is about 1–2 minutes, 3×3 to level
-3 is 10–50 minutes depending on contention. The search itself already uses a
-process pool, so more than three or four concurrent cases stops helping.
+Rough costs on this container: 2×2 chains are seconds now (level 3 in ~3 s, six
+levels in ~5 s), 3×3 to level 3 is about 2 minutes. The search itself already
+uses a process pool, so more than three or four concurrent cases stops helping.

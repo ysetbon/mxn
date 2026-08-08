@@ -39,8 +39,8 @@ python3 continuation/make_diagrams.py --m 2 --n 2 --ks 1 1 -1 --render --out /tm
 Every level prints one line:
 
 ```
-L3 k=-1 ok/ok  gap 56.48/56.43  ext (80,60)(80,60)
-       across 16/16  within 0  masks 8  stray 0  broken 0   regrouped, masks re-laid   WEAVE
+L3 k=-1 ok/ok  gap 56.91/56.89  ext (20,190)(20,190)
+       across 16/16  within 0  masks 8  stray 0  broken 0   k-based groups   WEAVE
 ```
 
 `across` is the number of crossings between the ring's two bands, `within` the

@@ -153,11 +153,14 @@ def run(m, n, ks, hand, direction, render, out_dir):
     # most recent first — deeper rings tend to land on combos already seen.
     seeds = [(rows[0]["ext"][0], rows[0]["ext"][1])]
 
+    prev_v2r = virtual_to_real
     for level in range(2, len(ks) + 1):
         with contextlib.redirect_stdout(io.StringIO()):
             strands, info = NX.add_continuation_level(
                 strands, m, n, ks[level - 1], direction, hand, level,
-                k_prev=ks[level - 2], verbose=False)
+                k_prev=ks[level - 2], prev_virtual_to_real=prev_v2r,
+                verbose=False)
+            prev_v2r = info["virtual_to_real"]
             result = NX.align_continuation_level(
                 strands, m, n, ks[level - 1], direction, hand, level, info,
                 seed_extensions=list(reversed(seeds)), verbose=False)

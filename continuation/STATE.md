@@ -1,54 +1,46 @@
 # Where this stands
 
 Measured on this commit, LH, `cw`. "Weave" means `across = (2m)(2n)`,
-`within = 0`, `stray = 0`.
+`within = 0`, `stray = 0`, `broken = 0`.
+
+Since the relabel composition landed (see ALGORITHM.md §2), **every level in
+every measured case below aligns natively on the k-based groups** — the same
+grouping, pairing and mask rule as level 1, at every depth. The
+direction-family rescue and mask re-laying never fire any more (they remain as
+a safety net); `bands mirrored` still fires on 3×3, and seeding regularly
+short-circuits deep levels.
 
 ## Working
 
-| case | level | k | gap H / V | extensions | verdict |
-| --- | --- | --- | --- | --- | --- |
-| 2×2 `[1, 1, −1]` | 1 | 1 | 56.43 / 56.41 | (80, 60)(80, 60) | weave |
-| | 2 | 1 | 56.58 / 56.60 | (90, 70)(90, 70) | weave |
-| | 3 | −1 | 56.48 / 56.43 | (80, 60)(80, 60) | weave, regrouped + masks re-laid |
-| 2×2 `[1, 1, 1]` | 3 | 1 | 56.90 / 56.90 | (20, 190)(20, 190) | weave, regrouped + masks re-laid |
-| 2×2 `[1, −1]` | 2 | −1 | 56.13 / 56.11 | (30, 100)(30, 100) | weave |
-| 3×3 `[1, 1, 1]` | 3 | 1 | 56.81 / 56.96 | (30, 120, 130)(50, 40, 30) | weave, regrouped |
+| case | levels | per-level ext | gaps | notes |
+| --- | --- | --- | --- | --- |
+| 2×2 `[1, 1, −1]` | 3/3 | (80,60) (90,70) (20,190) | 56.4–56.9 | all native, ~3 s total |
+| 2×2 `[1, 1, 1]` | 3/3 | (80,60) (90,70) (50,20) | 56.4–57.3 | all native |
+| 2×2 `[1, 1, 1, 1, 1, 1]` | 6/6 | L3+ all (50,20) | 56.4–58.4 | L4+ seeded, 5 s total |
+| 2×2 `[1, −1, 1, −1]` | 4/4 | …(110,90) (20,200) | 56.1–57.4 | 8 s total |
+| 2×2 `[1, 1, −1, −1]` | 4/4 | …(20,190) (50,40) | 56.4–56.9 | L4 mirrored |
+| 2×2 `[−1, −1]`, `[−1, 1]`, `[1, −1]` | 2/2 | — | 56.1–57.3 | native |
+| 3×3 `[1, 1, 1]` | 3/3 | (…) (80,20,50) (90,50,70) | 56.4–61.7 | L2/L3 mirrored, ~2 min |
+| 3×3 `[1, 1, −1]` | 3/3 | (…) (80,20,50) (60,30,20) | 56.5–60.1 | L2/L3 mirrored, ~2 min |
+
+A level-3 `k = −1` ring now has the **mixed-set bands** a real `k = −1` twist
+has (one arm from every set per band — compare level 1 at `k = −1`), because
+the engine's own `k` machinery finally sees an honest starting stitch at that
+depth. Under the old, uncomposed relabel it aligned into a `k = +1`-shaped
+ring with clean audit numbers — gaps, crossings and stray all read fine on a
+visibly wrong stitch. Rendered sequence:
+<https://claude.ai/code/artifact/94547328-6fbf-4c2e-9729-45155199399c>
 
 Level 1 is bit-identical to the published twist across every `k` on 2×2 and 3×3
-— same angle, same extensions, same gaps, all 16 groups. That is the regression
-test to re-run after touching anything (see below).
+— same angle, same extensions, same gaps. That is the regression test to re-run
+after touching anything (see below).
 
 ## Not working
 
-**3×3 `[1, 1, −1]` at level 3** — `across 34/36`, `within 0`, `stray 0`, gaps
-56.61 / 56.37, extensions `(10, 30, 20)(90, 50, 70)`. Two crossings short and
-the bands still disagree. The band-copy was attempted: H is the near band, and
-its `(10, 30, 20)` is **never a valid configuration for V**, so the copy could
-not be applied.
-
-`_mirror_extensions` was then extended to try the far band as donor when the
-near one cannot donate. **That change is committed but not yet verified on
-3×3** — a 3×3 level-3 run is 10–50 minutes. It is a no-op on 2×2, where the
-bands already agree, and 2×2 was re-verified after it landed. Verifying it is
-the obvious next task:
-
-```bash
-python3 continuation/make_diagrams.py --m 3 --n 3 --ks 1 1 -1 --out /tmp/seq
-```
-
-**Level 4 onward** — infeasible, and for a different reason from level 3. On
-2×2 `[1, 1, −1, −1]` the rescue does fire and finds a clean split (78.51° of
-k-based fan down to 18.10° of family fan), and the retry finds nothing either.
-Sweeping every heading at every extension on a 0–600px grid: **0 of 441 combos
-have a valid configuration**, for the direction families and the k-based groups
-alike. Not a grouping problem, not a window problem, not an anchor problem. The
-binding constraint is likely that middles cannot extend
-(`allow_inner_extensions=False`) so they must already lie on the required
-parallel lines, which gets harder as the ring distorts. Unproven.
-
-**2×2 at `k = 2`, level 3** — `across 0/16`. That is the max-k case, whose
-bespoke level-1 layout is defined in grid coordinates and has never been
-reproduced on a rotated ring. Known gap, predates this work.
+**Max-k beyond level 1** — `k = 2` on 2×2 (the max-k special case). Its bespoke
+level-1 layout is defined in grid coordinates and is not reproduced on a
+rotated ring. Measured: `[1, 1, 2]` level 3 reaches `across 12/16, stray 2`;
+`[2, 1]` level 2 only `4/16` with 820px arms. Known gap, predates this work.
 
 **Cross-level masks** — none exist. Within a ring the weave is correct, but a
 new ring lies entirely *on top of* the one below it; nothing decides who passes
@@ -76,25 +68,32 @@ Expected level-1 values, for comparison:
 | 3×3 | 2 | 22.53 | (20, 120, 90) | 58.06 |
 | 3×3 | 3 | −133.45 | (50, 40, 0) | 56.76 |
 
+Then the deep chains: 2×2 `[1, 1, -1]`, `[1, 1, 1, 1, 1, 1]` and
+`[1, -1, 1, -1]` (seconds each) must come out all-weave with `k-based groups`
+(no `regrouped`), and on 3×3 `[1, 1, -1]` (~2 min) all-weave with at most
+`bands mirrored`.
+
 ## Traps that cost time before
 
-- **Gaps do not tell you a level is good.** 2×2 `[1, 1, 1]` level 3 once
-  reported `ok/ok` at 56.47 / 56.60 on a ring carrying 8 of its 16 crossings.
-- **Nor does the crossing total on its own.** A ring reaches `(2m)(2n)` through
-  the wrong pairs just as easily — same-set arms crossing each other. Always
-  read `within` too.
-- **Nor do masks landing on real crossings.** Several arrangements do that while
-  covering a different half of the checkerboard, which inverts who goes over.
-- **Nor is `stray 0` the end of it.** Only half the crossings carry a mask; the
-  unmasked half resolves by the arms' draw order in the strand list. After a
-  regroup that order is stale, and 2×2 `[1, 1, −1]` level 3 shipped a "clean"
-  16/16, stray-0 ring with 6 of 8 arms breaking over/under alternation.
-  `_relay_draw_order` re-lays the ring's slots when the masks are re-laid, and
-  the audit's `broken` column now counts alternation failures directly.
+- **The relabel must be composed.** `build_level_relabel` without
+  `prev_virtual_to_real` assumes the previous level's map was the identity —
+  true only at level 2. From level 3 on the uncomposed map reverses each
+  horizontal pair's spatial order, the k-based groups span ~55° and the level
+  silently aligns into the wrong twist. Thread each level's `virtual_to_real`
+  into the next `add_continuation_level`.
+- **Every audit number can read clean on a wrong stitch.** The uncomposed
+  relabel produced rings with perfect gaps, 16/16 crossings, 0 stray, 0 broken
+  — as a k=+1-shaped ring, when the level's k was −1. Band *composition*
+  matters: a `k = −1` ring's bands mix the sets; set-aligned bands at a
+  `k = −1` level are themselves a red flag.
+- **Gaps do not tell you a level is good**, nor the crossing total on its own
+  (read `within` too), nor masks landing on real crossings (the wrong
+  checkerboard half inverts who goes over), nor `stray 0` (the unmasked half
+  resolves by the arms' draw order in the strand list — the audit's `broken`
+  column counts over/under alternation failures directly).
 - **The engine's gap rule** is between *consecutive strands in the group's
   order* for 3+ strands, not between the members of an outside-in pair. Pairing
-  only decides which strands share an extension value. Modelling it the other
-  way produces confident, wrong conclusions.
+  only decides which strands share an extension value.
 - **`on_config_callback` fires only for valid configurations**, so anything
   built on it silently misses the rest of the search space.
 - **The engine's CPU search runs in a process pool**, so monkeypatching
@@ -102,10 +101,13 @@ Expected level-1 values, for comparison:
   `_search_combo_space_cpu` or `_compute_pair_angle_range`, which are called in
   the parent.
 - **openstrandstudio is gitignored** and does not survive a new container.
-  Re-clone and symlink before rendering.
+  Re-clone and symlink before rendering (or use the Qt-free SVG route the
+  stitch-sheet skill's `render_strands.py` demonstrates).
 
 ## Published write-ups
 
+- Rendered L1–L3 sequence of 2×2 `[1, 1, −1]` (this commit's geometry):
+  <https://claude.ai/code/artifact/94547328-6fbf-4c2e-9729-45155199399c>
 - The window, the anchor and the masks, with before/after sequences:
   <https://claude.ai/code/artifact/0a66c084-8c46-451b-add0-37dce9a782e2>
 - Earlier: repeat mechanism `07e05849-5a62-4044-953b-4afbc69c8aa9`, weld and
