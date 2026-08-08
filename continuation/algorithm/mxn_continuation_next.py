@@ -1326,13 +1326,15 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     rescue = _plan_family_rescue(virtual_list, h_order, v_order)
     expected_crossings = len(h_order) * len(v_order)
 
-    def attempt(plan, force=(None, None)):
+    def attempt(plan, force=(None, None), bound=None):
         """
         Align the level once, either with the engine's k-based groups (plan None)
         or with the direction families, and report the ring it produced.
 
         `force` pins one side's extension combo instead of letting it choose —
-        see `_mirror_extensions`.
+        see `_mirror_extensions`. `bound` is `(ceiling, step)`: run one search
+        on that small fixed grid instead of the escalating schedule — used by
+        seeding to look NEAR a known combo without letting the arms run long.
         """
         working, back = _build_virtual_view(strands, level_info, level)
 
@@ -1385,16 +1387,24 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                     (align_h, orders[0], windows[0], force[0], "H"),
                     (align_v, orders[1], windows[1], force[1], "V")):
                 pairs = max((len(order) + 1) // 2, 1)
-                if pin is None:
+                if pin is not None:
+                    res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
+                    if res is None:
+                        return None
+                elif bound is not None:
+                    b_ceiling, b_step = bound
+                    res = align(b_ceiling, b_step, window)
+                    if not res.get("success"):
+                        return None
+                    sett = {"ceiling": b_ceiling, "step": b_step, "pairs": pairs,
+                            "combos": (b_ceiling // b_step + 1) ** pairs,
+                            "attempts": 1, "pinned": False, "bounded": True}
+                else:
                     res, sett = _search_group(
                         lambda ceiling, step, _a=align, _w=window: _a(ceiling, step, _w),
                         pairs, max_pair_extension, pair_extension_step,
                         escalate_extension, verbose,
                         label if plan is None else f"{label}*")
-                else:
-                    res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
-                    if res is None:
-                        return None
                 if plan is not None:
                     sett["rescued"] = True
                     sett["family"] = list(order)
@@ -1421,22 +1431,32 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 or (h_combo, v_combo) in seen_seeds):
             continue
         seen_seeds.add((h_combo, v_combo))
+        # A drifted ring rarely repeats a combo exactly, so a failed pin falls
+        # back to one small search AROUND the seed: ceiling just above its
+        # largest value, so a long-armed optimum is simply out of reach.
+        near = (int(-(-(max(h_combo + v_combo) + 30) // 10) * 10), 10)
         for plan in ((None, rescue) if rescue is not None else (None,)):
-            trial = attempt(plan, force=(h_combo, v_combo))
-            if trial is None or trial["crossings"] < expected_crossings:
-                continue
-            # `_pinned_search` labels its settings for the mirror; relabel them
-            # for the report so a seeded level does not read as a mirrored one.
-            for sett in (trial["h_settings"], trial["v_settings"]):
-                sett["mirrored"] = False
-                sett["seeded"] = True
-            if verbose:
-                print(f"    seeded from an earlier level: H{h_combo} V{v_combo} "
-                      f"gives a complete ring on the "
-                      f"{'direction families' if plan is not None else 'k-based groups'}, "
-                      f"skipping the full search")
-            chosen, plan_used = trial, plan
-            break
+            for how, kwargs in (("exactly", {"force": (h_combo, v_combo)}),
+                                ("nearby", {"bound": near})):
+                trial = attempt(plan, **kwargs)
+                if trial is None or trial["crossings"] < expected_crossings:
+                    continue
+                # `_pinned_search` labels its settings for the mirror; relabel
+                # them so a seeded level does not read as a mirrored one.
+                for sett in (trial["h_settings"], trial["v_settings"]):
+                    sett["mirrored"] = False
+                    sett["seeded"] = True
+                if verbose:
+                    got_h = tuple(trial["h"].get("pair_extensions") or ())
+                    got_v = tuple(trial["v"].get("pair_extensions") or ())
+                    print(f"    seed H{h_combo} V{v_combo} lands {how} "
+                          f"(H{got_h} V{got_v}) with a complete ring on the "
+                          f"{'direction families' if plan is not None else 'k-based groups'}, "
+                          f"skipping the full search")
+                chosen, plan_used = trial, plan
+                break
+            if chosen is not None:
+                break
         if chosen is not None:
             break
 

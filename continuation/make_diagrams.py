@@ -121,6 +121,32 @@ def describe(result, strands, level, k, expected):
             "broken": broken, "applied": applied, "healthy": healthy}
 
 
+def level1_extensions(engine, m, n, k, hand, direction):
+    """
+    The extensions level 1 settles on for this k, on a fresh starting stitch.
+
+    A deeper level with rotation k is, in its virtual frame, the same problem
+    level 1 solves for that k — so level 1's own combo is the natural first
+    seed, and it keeps the arms short: without it the full search on 2x2
+    [1, 1, -1] level 3 picks (20, 190) where level 1's k=-1 answer (0, 70)
+    is just as valid.
+    """
+    if k == 0:
+        return None
+    strands = _get_active_strands(
+        json.loads(engine.generate_json(m, n, k, direction)))
+    r2v, v2r = NX._identity_relabel(hand, m, n)
+    res = NX.align_continuation_level(
+        strands, m, n, k, direction, hand, 1,
+        {"level": 1, "k": k, "real_to_virtual": r2v, "virtual_to_real": v2r,
+         "new_masks": [s for s in strands if s.get("type") == "MaskedStrand"
+                       and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]},
+        verbose=False)
+    h = tuple(res["horizontal"].get("pair_extensions") or ())
+    v = tuple(res["vertical"].get("pair_extensions") or ())
+    return (h, v) if h and v else None
+
+
 def run(m, n, ks, hand, direction, render, out_dir):
     engine = NX.get_engine(hand)
     expected = (m * 2) * (n * 2)
@@ -151,19 +177,29 @@ def run(m, n, ks, hand, direction, render, out_dir):
 
     # Every settled level donates its combos as a seed for the next ones,
     # most recent first — deeper rings tend to land on combos already seen.
+    # But the FIRST seed for a level is level 1's own solution for that
+    # level's k: in the virtual frame a level-L twist at k is the same problem
+    # level 1 solves at k, and its combo keeps the arms short.
     seeds = [(rows[0]["ext"][0], rows[0]["ext"][1])]
+    level1_for_k = {ks[0]: (tuple(rows[0]["ext"][0]), tuple(rows[0]["ext"][1]))}
 
     prev_v2r = virtual_to_real
     for level in range(2, len(ks) + 1):
+        k_level = ks[level - 1]
         with contextlib.redirect_stdout(io.StringIO()):
+            if k_level not in level1_for_k:
+                level1_for_k[k_level] = level1_extensions(
+                    engine, m, n, k_level, hand, direction)
+            k_seed = level1_for_k[k_level]
+            level_seeds = ([k_seed] if k_seed else []) + list(reversed(seeds))
             strands, info = NX.add_continuation_level(
-                strands, m, n, ks[level - 1], direction, hand, level,
+                strands, m, n, k_level, direction, hand, level,
                 k_prev=ks[level - 2], prev_virtual_to_real=prev_v2r,
                 verbose=False)
             prev_v2r = info["virtual_to_real"]
             result = NX.align_continuation_level(
-                strands, m, n, ks[level - 1], direction, hand, level, info,
-                seed_extensions=list(reversed(seeds)), verbose=False)
+                strands, m, n, k_level, direction, hand, level, info,
+                seed_extensions=level_seeds, verbose=False)
             ordinal = {2: "2nd", 3: "3rd"}.get(level, f"{level}th")
             stages.append({"level": level, "k": ks[level - 1],
                            "label": f"{ordinal} twist",

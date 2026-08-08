@@ -138,18 +138,32 @@ strand_width * 1.5]` = `[56, 69]`.
 
 ### Seeding from earlier levels
 
-An aligned ring is geometrically another starting-stitch ring, so deeper
-levels tend to land on — or right next to — combos already seen: on 2×2
-`ks = [1, 1, −1]` the third twist settles on the exact `(80, 60)` the first
-one uses. `align_continuation_level` therefore takes `seed_extensions`, a list
-of `(h_combo, v_combo)` pairs (the driver passes levels 1..L−1's winners, most
-recent first). Each seed runs as a pinned search — grid sized to contain the
-combo, the engine's own angle window recomputed for it — first on the k-based
-groups, then on the direction families. The first seed whose ring is complete
-wins and the full escalation search is skipped; on 2×2 `[1, 1, −1]` that takes
-level 3 from ~50 s to ~2 s. If no seed produces a complete ring the normal
-search runs unchanged, so seeding can only speed a level up, never change what
-is reachable. A seeded level reports `seeded` in the audit's last column.
+An aligned ring is geometrically another starting-stitch ring, so a level-L
+twist at rotation `k` is — in its virtual frame — the same problem level 1
+solves at that `k`. `align_continuation_level` therefore takes
+`seed_extensions`, a list of `(h_combo, v_combo)` pairs. The driver passes,
+first, **level 1's own solution for the level's k** (computed once per
+distinct k on a fresh starting stitch), then the chain's earlier winners, most
+recent first.
+
+Each seed is tried twice, first on the k-based groups, then on the direction
+families:
+
+1. **Exactly** — a pinned search at the seed's combo (grid sized to contain
+   it, the engine's angle window recomputed for it).
+2. **Nearby** — a drifted ring rarely repeats a combo exactly, so a failed pin
+   falls back to one small search around the seed: ceiling just above the
+   seed's largest value, step 10. The long-armed optima the escalating search
+   likes are simply out of reach of that grid.
+
+The first attempt whose ring is complete wins and the full escalation search
+is skipped. This is what keeps deep extensions at level-1 scale: on 2×2
+`[1, 1, −1]` the unseeded search sends level 3 to `(20, 190)`, while the seed
+built from level 1's `k = −1` answer `(0, 70)` lands `(40, 70)` — same weave,
+arms a third as long — and a six-level chain runs in ~6 s with every level in
+the 20–90px range. If no seed produces a complete ring the normal search runs
+unchanged, so seeding can only shorten and speed a level, never change what is
+reachable. A seeded level reports `seeded` in the audit's last column.
 
 ### The angle window
 

@@ -14,14 +14,20 @@ short-circuits deep levels.
 
 | case | levels | per-level ext | gaps | notes |
 | --- | --- | --- | --- | --- |
-| 2×2 `[1, 1, −1]` | 3/3 | (80,60) (90,70) (20,190) | 56.4–56.9 | all native, ~3 s total |
-| 2×2 `[1, 1, 1]` | 3/3 | (80,60) (90,70) (50,20) | 56.4–57.3 | all native |
-| 2×2 `[1, 1, 1, 1, 1, 1]` | 6/6 | L3+ all (50,20) | 56.4–58.4 | L4+ seeded, 5 s total |
-| 2×2 `[1, −1, 1, −1]` | 4/4 | …(110,90) (20,200) | 56.1–57.4 | 8 s total |
-| 2×2 `[1, 1, −1, −1]` | 4/4 | …(20,190) (50,40) | 56.4–56.9 | L4 mirrored |
+| 2×2 `[1, 1, −1]` | 3/3 | (80,60) (90,70) (40,70) | 56.4–57.3 | L2/L3 seeded, ~6 s total |
+| 2×2 `[1, 1, 1]` | 3/3 | (80,60) (90,70) (50,20) | 56.4–57.3 | L3 mirrored |
+| 2×2 `[1, 1, 1, 1, 1, 1]` | 6/6 | …(50,20) (80,60) (60,40) (90,70) | 56.3–57.3 | seeded, 6 s total |
+| 2×2 `[1, −1, 1, −1]` | 4/4 | (80,60) (30,100) (110,90) (50,40) | 56.1–56.7 | all seeded, 6 s |
+| 2×2 `[1, 1, −1, −1]` | 4/4 | …(40,70) (30,100) | 56.3–57.3 | seeded, 6 s |
 | 2×2 `[−1, −1]`, `[−1, 1]`, `[1, −1]` | 2/2 | — | 56.1–57.3 | native |
-| 3×3 `[1, 1, 1]` | 3/3 | (…) (80,20,50) (90,50,70) | 56.4–61.7 | L2/L3 mirrored, ~2 min |
-| 3×3 `[1, 1, −1]` | 3/3 | (…) (80,20,50) (60,30,20) | 56.5–60.1 | L2/L3 mirrored, ~2 min |
+| 3×3 `[1, 1, 1]` | 3/3 | (…) (80,20,50) (90,50,70) | 56.4–61.7 | L2/L3 mirrored, ~1 min |
+| 3×3 `[1, 1, −1]` | 3/3 | (…) (80,20,50) (60,30,20) | 56.5–60.1 | L2/L3 mirrored, ~1 min |
+
+Extensions stay at level-1 scale because each level's first seed is level 1's
+own solution for that level's k, with a small bounded search around it (see
+ALGORITHM.md, "Seeding from earlier levels"). Without it the full search sends
+2×2 `[1, 1, −1]` level 3 to `(20, 190)` — a valid weave with needlessly long
+arms.
 
 A level-3 `k = −1` ring now has the **mixed-set bands** a real `k = −1` twist
 has (one arm from every set per band — compare level 1 at `k = −1`), because
