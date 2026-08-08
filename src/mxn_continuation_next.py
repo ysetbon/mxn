@@ -474,7 +474,7 @@ def _make_mask(v_strand, layer_name, set_number, first_strand, second_strand):
 
 def add_continuation_level(strands, m, n, k, direction, hand, level,
                            k_prev=None, retract=RETRACT, tail_offset=TAIL_OFFSET,
-                           anchor=ANCHOR, verbose=True):
+                           anchor=None, verbose=True):
     """
     Grow one continuation level onto an existing (ideally already aligned) ring.
 
@@ -493,13 +493,16 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         tail_offset:  how far past the paired point the new tail runs.
         anchor:       `"crossing"` welds each new stub at its source arm's own
                       outermost weave point, so extension 0 sits on a crossing;
-                      `"flat"` uses `retract` for every arm.
+                      `"flat"` uses `retract` for every arm. Defaults to
+                      `ANCHOR`, resolved at call time so it can be overridden.
 
     Returns:
         (all_strands, info) where info carries the relabel maps, the new strand
         list, the new mask list and the ordering used.
     """
     engine = get_engine(hand)
+    if anchor is None:
+        anchor = ANCHOR
     src_a, src_b, dst_a, dst_b = level_suffixes(level)
     src_suffixes = (f"_{src_a}", f"_{src_b}")
 
