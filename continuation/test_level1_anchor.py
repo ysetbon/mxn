@@ -49,8 +49,25 @@ class LevelOneAnchorTests(unittest.TestCase):
             self.assertEqual(len(children), 1, name)
             self.assertEqual(children[0]["start"], purple, name)
 
+    def test_square_level_uses_same_extensions_at_ninety_degrees(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = NX.align_continuation_level(
+                self.strands, 2, 2, 1, "cw", "lh", 1, self.info,
+                verbose=False)
+
+        horizontal = tuple(result["horizontal"]["pair_extensions"])
+        vertical = tuple(result["vertical"]["pair_extensions"])
+        self.assertEqual(horizontal, vertical)
+
+        h_angle = result["horizontal"]["angle_degrees"]
+        v_angle = result["vertical"]["angle_degrees"]
+        angle_delta = abs(((v_angle - h_angle + 180.0) % 360.0) - 180.0)
+        self.assertAlmostEqual(angle_delta, 90.0, delta=0.1)
+
     def test_level_one_uses_generic_continuation_metadata(self):
         self.assertEqual(self.info["level"], 1)
+        self.assertEqual(self.info["seed_extensions"], [
+            ((40, 10), (40, 10))])
         self.assertEqual(len(self.info["new_strands"]), 8)
         self.assertEqual(len(self.info["new_masks"]), 8)
         self.assertEqual(set(self.info["real_to_virtual"]), {

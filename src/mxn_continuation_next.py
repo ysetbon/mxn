@@ -115,6 +115,9 @@ ANGLE_MODE = "first_strand"
 ANGLE_STEP_DEGREES = 0.5
 MAX_EXTENSION = 100.0
 MAX_PAIR_EXTENSION = 200
+LEVEL_ONE_DEFAULT_SOLUTIONS = {
+    (2, 2, 1, "lh", "cw"): ((40, 10), (40, 10)),
+}
 # Finest extension grid first; the search costs (ext_max/step + 1) ** pairs, so
 # coarsen only as far as the combo budget forces.
 EXT_STEPS = [10, 20, 25, 40, 50, 100]
@@ -1315,10 +1318,13 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
 
     if escalate_extension is None:
         escalate_extension = level >= 2
+    if seed_extensions is None:
+        seed_extensions = level_info.get("seed_extensions")
+
     if mirror_sides is None:
-        # Level 1 is the published twist and must reproduce exactly; from the
-        # second level on, a square stitch should be symmetric.
-        mirror_sides = level >= 2 and m == n
+        # Every square ring has 90-degree rotational symmetry: corresponding
+        # H/V pairs must use one shared extension solution at every level.
+        mirror_sides = m == n
 
     # Group sizes come from the engine's own k-based sets, exactly as the twist
     # sheet sizes its search.
@@ -1392,9 +1398,18 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
 
         try:
             results, settings = [], []
+            share_square_extensions = (
+                level == 1 and m == n and mirror_sides
+                and force == (None, None))
             for align, order, window, pin, label in (
                     (align_h, orders[0], windows[0], force[0], "H"),
                     (align_v, orders[1], windows[1], force[1], "V")):
+                # On a square stitch V is H rotated by 90 degrees. Search H
+                # optimally, then solve V at that exact same extension tuple.
+                if label == "V" and share_square_extensions and results:
+                    pin = tuple(results[0].get("pair_extensions") or ())
+                    if not pin:
+                        return None
                 pairs = max((len(order) + 1) // 2, 1)
                 if pin is not None:
                     res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
@@ -1436,6 +1451,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     for h_combo, v_combo in (seed_extensions or []):
         h_combo = tuple(int(v) for v in (h_combo or ()))
         v_combo = tuple(int(v) for v in (v_combo or ()))
+        if m == n and mirror_sides:
+            v_combo = h_combo
         if (len(h_combo) != h_pairs or len(v_combo) != v_pairs
                 or (h_combo, v_combo) in seen_seeds):
             continue
@@ -1638,15 +1655,18 @@ def build_level_one(m, n, k, hand="lh", direction="cw",
     untouched L0 snapshot; ``strands`` contains L0 retracted to its crossing
     anchors plus the new L1 arms and masks.
     """
-    engine = get_engine(hand)
-    reference = _get_active_strands(
-        json.loads(engine.generate_json(m, n, int(k), direction)))
-    starting_json = build_starting_stitch_json(
-        m, n, hand, reference_strands=reference)
+    # Avoid the legacy generator's full L1 search when only L0 is needed.
+    # The stretch generator already supplies the complete starting geometry;
+    # new continuation children inherit their parent colours.
+    starting_json = build_starting_stitch_json(m, n, hand)
     strands = _get_active_strands(json.loads(starting_json))
     strands, info = add_continuation_level(
         strands, m, n, int(k), direction, hand, 1,
         retract=retract, tail_offset=tail_offset, verbose=verbose)
+    default_solution = LEVEL_ONE_DEFAULT_SOLUTIONS.get(
+        (int(m), int(n), int(k), hand, direction))
+    if default_solution is not None:
+        info["seed_extensions"] = [default_solution]
     return starting_json, strands, info
 
 

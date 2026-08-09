@@ -14,8 +14,8 @@ short-circuits deep levels.
 
 | case | levels | per-level ext H · V | gaps H / V | notes |
 | --- | --- | --- | --- | --- |
-| 2×2 `[1, 1, −1]` | 3/3 | `(40,10)·(170,150)`; `(150,100)·(150,100)`; `(30,110)·(30,110)` | `56.30/56.81`; `56.80/65.94`; `58.87/58.23` | L2 mirrored, L3 seeded |
-| 2×2 `[1, 1, −1, −1, −1, −1, −1]` | 7/7 | see `docs/README.md` | 56.30–67.84 | seeded + mirrored, ~56 s |
+| 2×2 `[1, 1, −1]` | 3/3 | `(40,10)·(40,10)`; `(60,30)·(60,30)`; `(30,110)·(30,110)` | `56.30/56.29`; `57.40/57.41`; `57.36/57.36` | all seeded |
+| 2×2 `[1, 1, −1, −1, −1, −1, −1]` | 7/7 | see `docs/README.md` | 56.29–57.69 | all seeded, ~32 s |
 
 Extensions stay near previously successful scales because each level's first
 seed is level 1's own solution for that level's k, with a small bounded search
