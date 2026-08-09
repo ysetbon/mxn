@@ -139,7 +139,8 @@ def render(strands, view, label, max_level, idp):
         return (f'M {ax+nx:.2f},{ay+ny:.2f} L {bx+nx:.2f},{by+ny:.2f} '
                 f'L {bx-nx:.2f},{by-ny:.2f} L {ax-nx:.2f},{ay-ny:.2f} Z')
 
-    def shape_parts(s, width, color, clip_id=None, mask_geometry=False):
+    def shape_parts(s, width, color, clip_id=None, mask_geometry=False,
+                    draw_side_lines=False):
         """Return one unified SVG paint layer for a strand body and its caps.
 
         Mask geometry follows OpenStrandStudio: only an AttachedStrand's
@@ -161,6 +162,30 @@ def render(strands, view, label, max_level, idp):
             cx, cy = (ax, ay) if i == 0 else (bx, by)
             parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{width/2:.2f}" fill="{color}"/>')
         parts.append(f'<path d="{band_path(s, width)}" fill="{color}"/>')
+
+        if draw_side_lines:
+            dx, dy = bx - ax, by - ay
+            length = (dx * dx + dy * dy) ** 0.5 or 1.0
+            ux, uy = dx / length, dy / length
+            px, py = -uy, ux
+            half_total = (s["width"] + 2 * s["stroke_width"]) / 2
+            shift = s["stroke_width"] / 2
+
+            def side_line(anchor_x, anchor_y, direction):
+                cx = anchor_x + ux * shift * direction
+                cy = anchor_y + uy * shift * direction
+                return (f'<line x1="{cx-px*half_total:.2f}" y1="{cy-py*half_total:.2f}" '
+                        f'x2="{cx+px*half_total:.2f}" y2="{cy+py*half_total:.2f}" '
+                        f'stroke="black" stroke-width="{s["stroke_width"]:.2f}" '
+                        f'stroke-linecap="butt"/>')
+
+            circles = s.get("has_circles", [False, False])
+            if (s.get("type") == "Strand"
+                    and s.get("start_line_visible", True)
+                    and not circles[0]):
+                parts.append(side_line(ax, ay, -1))
+            if s.get("end_line_visible", True) and not circles[1]:
+                parts.append(side_line(bx, by, 1))
 
         parts.append("</g>")
         return "".join(parts)
@@ -196,7 +221,7 @@ def render(strands, view, label, max_level, idp):
                 continue
             col = color_for(s, vert)
             out.append(shape_parts(s, s["width"] + 2 * s["stroke_width"], "black"))
-            out.append(shape_parts(s, s["width"], col))
+            out.append(shape_parts(s, s["width"], col, draw_side_lines=True))
         for s in strands:
             if s.get("type") != "MaskedStrand" or strand_level(s) != lvl:
                 continue
