@@ -25,8 +25,11 @@ sys.path.insert(0, SRC)
 import mxn_continuation_next as NX
 
 
-def audit(strands, level):
+def audit(strands, level, sizes=None):
     """(across, within, masks, stray, broken) for the ring this level produced.
+
+    `sizes` is the (2m, 2n) direction-family split. Without it a non-square ring
+    is cut in half and real cross-band crossings are miscounted as within-band.
 
     `broken` counts arms whose crossings do not alternate over/under. A mask
     forces its `first_selected_strand` over; an unmasked crossing goes to
@@ -40,7 +43,7 @@ def audit(strands, level):
     if len(arms) < 4:
         return 0, 0, 0, 0, 0
     by_name = {s["layer_name"]: s for s in arms}
-    band_a, _band_b, _fan = NX._split_direction_families(by_name, list(by_name))
+    band_a, _band_b, _fan = NX._split_direction_families(by_name, list(by_name), sizes)
     band_a = set(band_a)
 
     masks = [s for s in strands if s.get("type") == "MaskedStrand"
@@ -81,8 +84,8 @@ def audit(strands, level):
     return across, within, len(masks), stray, broken
 
 
-def describe(result, strands, level, k, expected):
-    across, within, n_masks, stray, broken = audit(strands, level)
+def describe(result, strands, level, k, expected, sizes=None):
+    across, within, n_masks, stray, broken = audit(strands, level, sizes)
 
     def state(axis):
         r = result[axis]
@@ -143,6 +146,7 @@ def level1_extensions(m, n, k, hand, direction):
 
 def run(m, n, ks, hand, direction, render, out_dir):
     expected = (m * 2) * (n * 2)
+    sizes = (2 * m, 2 * n)
     started = time.time()
     rows, stages = [], []
 
@@ -161,7 +165,7 @@ def run(m, n, ks, hand, direction, render, out_dir):
         stages.append({"level": 1, "k": ks[0], "label": "1st twist",
                        "json": NX._snapshot_json(strands)})
         snapshot = [dict(s) for s in strands]
-    rows.append(describe(result, snapshot, 1, ks[0], expected))
+    rows.append(describe(result, snapshot, 1, ks[0], expected, sizes))
 
     # Every settled level donates its combos as a seed for the next ones,
     # most recent first — deeper rings tend to land on combos already seen.
@@ -193,7 +197,7 @@ def run(m, n, ks, hand, direction, render, out_dir):
                            "label": f"{ordinal} twist",
                            "json": NX._snapshot_json(strands)})
             snapshot = [dict(s) for s in strands]
-        rows.append(describe(result, snapshot, level, ks[level - 1], expected))
+        rows.append(describe(result, snapshot, level, ks[level - 1], expected, sizes))
         seeds.append((rows[-1]["ext"][0], rows[-1]["ext"][1]))
 
     report = {"m": m, "n": n, "hand": hand, "direction": direction, "ks": ks,

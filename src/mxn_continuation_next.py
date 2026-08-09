@@ -415,7 +415,7 @@ def _segment_crossing(a, b):
     return t if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0 else None
 
 
-def crossing_anchors(source_by_name, fallback=RETRACT):
+def crossing_anchors(source_by_name, fallback=RETRACT, sizes=None):
     """
     How far to pull each arm of a ring back so its end lands on its own OUTERMOST
     crossing with the other band — the ring's own weave points.
@@ -428,11 +428,15 @@ def crossing_anchors(source_by_name, fallback=RETRACT):
     The two bands are read off the geometry as the ring's two direction
     families, so this works at any level and for any k without relabel algebra.
     An arm that crosses nothing keeps the flat fallback.
+
+    `sizes` is the (2m, 2n) family split -- without it a non-square ring is cut
+    in half, and the arms that land in the wrong band cross nothing in "the
+    other band" and silently take the flat fallback instead of their crossing.
     """
     names = list(source_by_name)
     if len(names) < 4 or len(names) % 2:
         return {}
-    band_a, band_b, _ = _split_direction_families(source_by_name, names)
+    band_a, band_b, _ = _split_direction_families(source_by_name, names, sizes)
 
     anchors = {}
     for mine, others in ((band_a, band_b), (band_b, band_a)):
@@ -577,7 +581,8 @@ def add_continuation_level(strands, m, n, k, direction, hand, level,
         name: {"start": dict(s["start"]), "end": dict(s["end"])}
         for name, s in source_by_name.items()
     }
-    anchors = crossing_anchors(source_by_name, retract) if anchor == "crossing" else {}
+    anchors = (crossing_anchors(source_by_name, retract, sizes=(2 * m, 2 * n))
+               if anchor == "crossing" else {})
     for real_name in real_to_virtual:
         _retract_end(source_by_name[real_name], anchors.get(real_name, retract))
 
@@ -801,26 +806,44 @@ def _line_fan(lines):
     return max((_line_separation(a, b) for a in lines for b in lines), default=0.0)
 
 
-def _split_direction_families(by_name, names):
+def _split_direction_families(by_name, names, sizes=None):
     """
-    Split arms into two equal direction families, minimising the wider fan.
+    Split arms into two direction families, minimising the wider fan.
 
     Each arm in turn seeds a candidate split: rank the others by how close their
-    line is to the seed's and cut in half. The split whose worse family is
-    narrowest wins. Within a family the arms are ordered across the family line,
-    which is the spatial order the engine's outside-in pairing expects.
+    line is to the seed's and cut. The split whose worse family is narrowest
+    wins. Within a family the arms are ordered across the family line, which is
+    the spatial order the engine's outside-in pairing expects.
+
+    An m x n ring has 2m arms in one direction family and 2n in the other, so
+    the families are the same size ONLY on a square. `sizes` lists the cut
+    lengths to consider -- pass (2m, 2n). Cutting in half regardless, which is
+    what this did before, bundles part of the larger family in with the smaller
+    one whenever m != n: on 1x3 it forces 4/4 on a 2/6 ring, so the two vertical
+    arms end up in the same "band" as one horizontal set. Every consumer then
+    reads the ring wrong -- `_ring_crossings` scores real cross-band crossings
+    as within-band and subtracts them, and `crossing_anchors` finds no crossing
+    in the mis-assigned other band and falls back to the flat retract, so
+    extension 0 stops meaning "at the purple crossing".
+
+    The default keeps the equal split, which stays correct when m == n (there
+    (2m, 2n) collapses to the single cut len(names) // 2).
 
     Returns (family_a, family_b, worst_fan) with each family a list of names.
     """
     lines = {nm: _line_angle(by_name[nm]) for nm in names}
-    half = len(names) // 2
+    total = len(names)
+    cuts = sorted({c for c in (sizes or (total // 2,)) if 0 < c < total})
+    if not cuts:
+        cuts = [total // 2]
     best = None
     for seed in names:
         ranked = sorted(names, key=lambda nm: _line_separation(lines[nm], lines[seed]))
-        groups = (ranked[:half], ranked[half:])
-        worst = max(_line_fan([lines[nm] for nm in g]) for g in groups)
-        if best is None or worst < best[0]:
-            best = (worst, groups)
+        for cut in cuts:
+            groups = (ranked[:cut], ranked[cut:])
+            worst = max(_line_fan([lines[nm] for nm in g]) for g in groups)
+            if best is None or worst < best[0]:
+                best = (worst, groups)
 
     worst_fan, groups = best
     ordered = []
@@ -850,7 +873,7 @@ def _family_window(by_name, family):
     return mean - half, mean + 180.0 + half
 
 
-def _ring_crossings(virtual_list):
+def _ring_crossings(virtual_list, sizes=None):
     """
     Score the new ring by its weave, as `across - within`.
 
@@ -876,7 +899,7 @@ def _ring_crossings(virtual_list):
     if len(arms) < 4:
         return 0
     by_name = {s["layer_name"]: s for s in arms}
-    band_a, band_b, _ = _split_direction_families(by_name, list(by_name))
+    band_a, band_b, _ = _split_direction_families(by_name, list(by_name), sizes)
     band_a = set(band_a)
 
     across = within = 0
@@ -1162,6 +1185,11 @@ def _mirror_extensions(attempt, chosen, plan, expected, sides, verbose):
     """
     if not sides:
         return None
+    # Defensive: an attempt that produced no per-band result has nothing to
+    # mirror. (The k=0 square case that used to land here is fixed upstream, in
+    # the share-square-extensions branch of `attempt`.)
+    if not chosen or chosen.get("h") is None or chosen.get("v") is None:
+        return None
     h_ext = tuple(chosen["h"].get("pair_extensions") or ())
     v_ext = tuple(chosen["v"].get("pair_extensions") or ())
     if not h_ext or not v_ext or h_ext == v_ext or len(h_ext) != len(v_ext):
@@ -1417,7 +1445,11 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 if label == "V" and share_square_extensions and results:
                     pin = tuple(results[0].get("pair_extensions") or ())
                     if not pin:
-                        return None
+                        # k=0 preserves the continuation and aligns nothing, so
+                        # H has no combo to share. That is not a failed search:
+                        # let V run its own (equally empty) pass instead of
+                        # collapsing the whole attempt to None.
+                        pin = None
                 pairs = max((len(order) + 1) // 2, 1)
                 if pin is not None:
                     res, sett = _pinned_search(align, window, pin, pairs, verbose, label)
@@ -1452,7 +1484,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         return {"h": results[0], "v": results[1],
                 "h_settings": settings[0], "v_settings": settings[1],
                 "virtual_list": working, "back_map": back,
-                "crossings": _ring_crossings(working)}
+                "crossings": _ring_crossings(working, sizes=(2 * m, 2 * n))}
 
     chosen, plan_used = None, None
     seen_seeds = set()
