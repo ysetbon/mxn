@@ -23,6 +23,11 @@ import time
 import colorsys
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 
+# How much extra gap variance (px^2, on gaps of ~56-69px) the selection will
+# accept in exchange for shorter arms. 1.0 is roughly one pixel of standard
+# deviation. See _pick_lowest_variance.
+SHORT_ARM_VARIANCE_TOLERANCE = 1.0
+
 # Emoji names matching the order in mxn_emoji_renderer.get_animal_pool()
 EMOJI_NAMES = [
     "dog", "cat", "mouse", "rabbit", "hedgehog",      # 0-4
@@ -2578,12 +2583,37 @@ def _total_extension(result):
     return sum(exts)
 
 
+def _pick_lowest_variance(results, prefer_short_arms,
+                          variance_tolerance=SHORT_ARM_VARIANCE_TOLERANCE):
+    """
+    Lowest gap variance in `results` -- or, with `prefer_short_arms`, the
+    shortest arms among those whose variance is within `variance_tolerance`
+    of the lowest.
+
+    Variance alone cannot separate a 10px-armed solution from a 200px-armed one
+    that hangs equally evenly, and on a multi-gap band nothing else in the
+    selection looked at extension magnitude at all, so the long-armed
+    configuration won as often as not. The tolerance is absolute and in px^2 on
+    gaps of ~56-69px, so it trades a hair of evenness for arms that are
+    materially shorter, and variance still breaks ties inside the window.
+    """
+    lowest = min(r.get("gap_variance", float('inf')) for r in results)
+    if not prefer_short_arms:
+        return min(results, key=lambda r: r.get("gap_variance", float('inf')))
+    near = [r for r in results
+            if r.get("gap_variance", float('inf')) <= lowest + variance_tolerance]
+    return min(near, key=lambda r: (_total_extension(r),
+                                    r.get("gap_variance", float('inf'))))
+
+
 def _select_best_result(valid_results, distance_tolerance=2.0,
-                        single_gap_distance_tolerance=6.0):
+                        single_gap_distance_tolerance=6.0,
+                        prefer_short_arms=True):
     """
     Select best result using tiered priority:
     1. Smallest first-last distance (within distance_tolerance px)
-    2. Lowest gap variance within that distance group
+    2. Lowest gap variance within that distance group -- or, when
+       `prefer_short_arms`, the shortest arms among the near-lowest variances
     3. If only 1 result at smallest distance, also compare with next group
 
     Special case: when all results have only a single gap (len(gaps) <= 1),
@@ -2633,8 +2663,8 @@ def _select_best_result(valid_results, distance_tolerance=2.0,
     group1 = [r for r in sorted_results
               if r.get("first_last_distance", float('inf')) <= smallest_dist + distance_tolerance]
 
-    # Best in group 1 by gap variance
-    best_g1 = min(group1, key=lambda r: r.get("gap_variance", float('inf')))
+    # Best in group 1 by gap variance (shortest arms among the near-lowest)
+    best_g1 = _pick_lowest_variance(group1, prefer_short_arms)
 
     if len(group1) > 1:
         # Multiple results in group 1, pick best variance
@@ -2656,7 +2686,7 @@ def _select_best_result(valid_results, distance_tolerance=2.0,
     group2 = [r for r in remaining
               if r.get("first_last_distance", float('inf')) <= next_smallest + distance_tolerance]
 
-    best_g2 = min(group2, key=lambda r: r.get("gap_variance", float('inf')))
+    best_g2 = _pick_lowest_variance(group2, prefer_short_arms)
 
     # Compare: if group 2 has better variance, prefer it
     g1_var = best_g1.get("gap_variance", float('inf'))
@@ -3265,7 +3295,8 @@ def align_horizontal_strands_parallel(all_strands, n,
                                        pair_extension_step=10,
                                        m=None, k=0, direction="cw",
                                        use_gpu=False,
-                                       angle_mode="first_strand"):
+                                       angle_mode="first_strand",
+                                       prefer_short_arms=True):
     """
     Parallel alignment of horizontal _4/_5 strands using first-last pair approach.
 
@@ -3534,7 +3565,8 @@ def align_horizontal_strands_parallel(all_strands, n,
             num_opposite_pairs=v_num_opposite_pairs,
         )
 
-    best_result = _select_best_result(all_valid_results)
+    best_result = _select_best_result(all_valid_results,
+                                      prefer_short_arms=prefer_short_arms)
     if best_result:
         best_pair_extensions = best_result.get("pair_extensions", (0,))
         print(f"\n=== Best Solution Found ===")
@@ -3601,7 +3633,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
                                      pair_extension_step=10,
                                      k=0, direction="cw",
                                      use_gpu=False,
-                                     angle_mode="first_strand"):
+                                     angle_mode="first_strand",
+                                     prefer_short_arms=True):
     """
     Parallel alignment of vertical _4/_5 strands using first-last pair approach.
 
@@ -3878,7 +3911,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
             num_opposite_pairs=h_num_opposite_pairs,
         )
 
-    best_result = _select_best_result(all_valid_results)
+    best_result = _select_best_result(all_valid_results,
+                                      prefer_short_arms=prefer_short_arms)
     if best_result:
         best_pair_extensions = best_result.get("pair_extensions", (0,))
         print(f"\n=== Best Vertical Solution Found ===")
