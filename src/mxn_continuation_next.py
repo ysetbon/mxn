@@ -85,6 +85,7 @@ from ui_utils import _get_active_strands
 
 __all__ = [
     "generate_multi_level_json",
+    "build_level_one",
     "add_continuation_level",
     "align_continuation_level",
     "build_symbolic_pairings",
@@ -1624,6 +1625,31 @@ def build_starting_stitch_json(m, n, hand, reference_strands=None):
     return _history_json(strands)
 
 
+def build_level_one(m, n, k, hand="lh", direction="cw",
+                    retract=RETRACT, tail_offset=TAIL_OFFSET, verbose=True):
+    """Build L0, then grow L1 from L0's purple crossing anchors.
+
+    This uses :func:`add_continuation_level` for level 1 instead of the legacy
+    one-level generator's prebuilt ``_4/_5`` arms. Extension 0 consequently
+    has the same meaning at every depth: the source arm's own outermost
+    crossing with the other band.
+
+    Returns ``(starting_json, strands, info)``. ``starting_json`` is the
+    untouched L0 snapshot; ``strands`` contains L0 retracted to its crossing
+    anchors plus the new L1 arms and masks.
+    """
+    engine = get_engine(hand)
+    reference = _get_active_strands(
+        json.loads(engine.generate_json(m, n, int(k), direction)))
+    starting_json = build_starting_stitch_json(
+        m, n, hand, reference_strands=reference)
+    strands = _get_active_strands(json.loads(starting_json))
+    strands, info = add_continuation_level(
+        strands, m, n, int(k), direction, hand, 1,
+        retract=retract, tail_offset=tail_offset, verbose=verbose)
+    return starting_json, strands, info
+
+
 def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
                               align=True, angle_mode=ANGLE_MODE,
                               angle_step_degrees=ANGLE_STEP_DEGREES,
@@ -1658,13 +1684,12 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
     if not ks:
         raise ValueError("ks must contain at least one k (the _4/_5 level)")
 
-    engine = get_engine(hand)
     ks = [int(k) for k in ks]
 
-    # ---- level 1: the engines' own starting stitch + _4/_5 continuation ----
-    level1_json = engine.generate_json(m, n, ks[0], direction)
-    data = json.loads(level1_json)
-    strands = _get_active_strands(data)
+    # ---- level 1: use the same purple-anchor constructor as every level ----
+    starting_json, strands, level1_info = build_level_one(
+        m, n, ks[0], hand, direction,
+        retract=retract, tail_offset=tail_offset, verbose=verbose)
 
     report = {
         "m": m, "n": n, "hand": hand, "direction": direction, "ks": ks,
@@ -1677,28 +1702,17 @@ def generate_multi_level_json(m, n, ks, hand="lh", direction="cw",
             "level": 0,
             "k": None,
             "label": "starting stitch (_1/_2/_3)",
-            "json": build_starting_stitch_json(m, n, hand, reference_strands=strands),
+            "json": starting_json,
         })
-
-    ident_real_to_virtual, ident_virtual_to_real = _identity_relabel(hand, m, n)
-    level1_info = {
-        "level": 1,
-        "k": ks[0],
-        "k_prev": None,
-        "real_to_virtual": ident_real_to_virtual,
-        "virtual_to_real": ident_virtual_to_real,
-        "new_masks": [s for s in strands
-                      if s.get("type") == "MaskedStrand"
-                      and _is_level_mask(s.get("layer_name", ""), 4, 5)],
-    }
 
     level_entry = {
         "level": 1,
         "k": ks[0],
         "suffixes": "_2/_3 -> _4/_5",
-        "strands": [s["layer_name"] for s in strands
-                    if s.get("type") == "AttachedStrand"
-                    and s.get("layer_name", "").endswith(("_4", "_5"))],
+        "strands": [s["layer_name"] for s in level1_info["new_strands"]],
+        "masks": [s["layer_name"] for s in level1_info["new_masks"]],
+        "vertical_order": level1_info["vertical_order"],
+        "horizontal_order": level1_info["horizontal_order"],
     }
 
     if align:

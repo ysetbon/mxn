@@ -12,23 +12,15 @@ short-circuits deep levels.
 
 ## Working
 
-| case | levels | per-level ext | gaps | notes |
+| case | levels | per-level ext H · V | gaps H / V | notes |
 | --- | --- | --- | --- | --- |
-| 2×2 `[1, 1, −1]` | 3/3 | (80,60) (90,70) (40,70) | 56.4–57.3 | L2/L3 seeded, ~6 s total |
-| 2×2 `[1, 1, 1]` | 3/3 | (80,60) (90,70) (50,20) | 56.4–57.3 | L3 mirrored |
-| 2×2 `[1, 1, 1, 1, 1, 1]` | 6/6 | …(50,20) (80,60) (60,40) (90,70) | 56.3–57.3 | seeded, 6 s total |
-| 2×2 `[1, 1, −1, −1, −1, −1, −1]` | 7/7 | …(40,70) (30,100) (40,70) (30,100) (50,40) | 56.3–57.6 | seeded + mirrored, ~10 s |
-| 2×2 `[1, −1, 1, −1]` | 4/4 | (80,60) (30,100) (110,90) (50,40) | 56.1–56.7 | all seeded, 6 s |
-| 2×2 `[1, 1, −1, −1]` | 4/4 | …(40,70) (30,100) | 56.3–57.3 | seeded, 6 s |
-| 2×2 `[−1, −1]`, `[−1, 1]`, `[1, −1]` | 2/2 | — | 56.1–57.3 | native |
-| 3×3 `[1, 1, 1]` | 3/3 | (…) (80,20,50) (90,50,70) | 56.4–61.7 | L2/L3 mirrored, ~1 min |
-| 3×3 `[1, 1, −1]` | 3/3 | (…) (80,20,50) (60,30,20) | 56.5–60.1 | L2/L3 mirrored, ~1 min |
+| 2×2 `[1, 1, −1]` | 3/3 | `(40,10)·(170,150)`; `(150,100)·(150,100)`; `(30,110)·(30,110)` | `56.30/56.81`; `56.80/65.94`; `58.87/58.23` | L2 mirrored, L3 seeded |
+| 2×2 `[1, 1, −1, −1, −1, −1, −1]` | 7/7 | see `docs/README.md` | 56.30–67.84 | seeded + mirrored, ~56 s |
 
-Extensions stay at level-1 scale because each level's first seed is level 1's
-own solution for that level's k, with a small bounded search around it (see
-ALGORITHM.md, "Seeding from earlier levels"). Without it the full search sends
-2×2 `[1, 1, −1]` level 3 to `(20, 190)` — a valid weave with needlessly long
-arms.
+Extensions stay near previously successful scales because each level's first
+seed is level 1's own solution for that level's k, with a small bounded search
+around it (see ALGORITHM.md, "Seeding from earlier levels"). Without seeding,
+the full search can find valid weaves with needlessly long arms.
 
 A level-3 `k = −1` ring now has the **mixed-set bands** a real `k = −1` twist
 has (one arm from every set per band — compare level 1 at `k = −1`), because
@@ -38,9 +30,10 @@ ring with clean audit numbers — gaps, crossings and stray all read fine on a
 visibly wrong stitch. Rendered sequence:
 <https://claude.ai/code/artifact/94547328-6fbf-4c2e-9729-45155199399c>
 
-Level 1 is bit-identical to the published twist across every `k` on 2×2 and 3×3
-— same angle, same extensions, same gaps. That is the regression test to re-run
-after touching anything (see below).
+Level 1 intentionally differs from the legacy one-level generator: it now starts
+at L0's purple crossing anchors. The regression invariant is geometric instead:
+every new `_4/_5` strand starts exactly at its `_2/_3` parent's outermost
+cross-band crossing. `test_level1_anchor.py` checks that invariant directly.
 
 ## Not working
 
@@ -55,30 +48,18 @@ over whom between levels. Deliberately out of scope so far.
 
 ## Regression check before you commit
 
-Level 1 must not move. Cheapest form:
+Run the focused L0 → L1 anchor test first:
 
 ```bash
-for k in -1 1 2; do python3 continuation/make_diagrams.py --m 2 --n 2 --ks $k; done
-for k in -2 -1 1 2 3; do python3 continuation/make_diagrams.py --m 3 --n 3 --ks $k; done
+python3 -m unittest continuation.test_level1_anchor -v
 ```
 
-Expected level-1 values, for comparison:
+Then run the 2×2 deep-chain audit. Every row must report `WEAVE`, with 16/16
+cross-band crossings, 0 within-band crossings, 0 stray masks and 0 broken arms:
 
-| size | k | angle H | ext H | gap H |
-| --- | --- | --- | --- | --- |
-| 2×2 | −1 | 162.82 | (0, 70) | 57.34 |
-| 2×2 | 1 | −162.82 | (80, 60) | 56.43 |
-| 2×2 | 2 | 47.38 | (40, 0) | 56.69 |
-| 3×3 | −2 | −34.80 | (40, 30, 0) | 57.59 |
-| 3×3 | −1 | 165.60 | (10, 60, 40) | 56.59 |
-| 3×3 | 1 | −168.97 | (140, 100, 120) | 56.86 |
-| 3×3 | 2 | 22.53 | (20, 120, 90) | 58.06 |
-| 3×3 | 3 | −133.45 | (50, 40, 0) | 56.76 |
-
-Then the deep chains: 2×2 `[1, 1, -1]`, `[1, 1, 1, 1, 1, 1]` and
-`[1, -1, 1, -1]` (seconds each) must come out all-weave with `k-based groups`
-(no `regrouped`), and on 3×3 `[1, 1, -1]` (~2 min) all-weave with at most
-`bands mirrored`.
+```bash
+python3 continuation/make_diagrams.py --m 2 --n 2 --ks 1 1 -1 -1 -1 -1 -1
+```
 
 ## Traps that cost time before
 
