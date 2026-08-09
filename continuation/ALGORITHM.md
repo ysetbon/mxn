@@ -1,15 +1,16 @@
 # The algorithm
 
-Everything here lives in `src/mxn_continuation_next.py`. Level 1 is built by the
-engines (`src/mxn_lh_continuation.py`, `src/mxn_rh_continuation.py`) and is not
-touched by any of this.
+Everything here lives in `src/mxn_continuation_next.py`. The hand-specific
+engines (`src/mxn_lh_continuation.py`, `src/mxn_rh_continuation.py`) still do the
+alignment search, but every level -- including level 1 -- is now grown by the
+same continuation constructor.
 
 ## 1. Level bookkeeping
 
 Suffixes advance by two per level:
 
 ```
-level 1:  _2/_3  --k1-->  _4/_5        (the engines' own generate_json)
+level 1:  _2/_3  --k1-->  _4/_5
 level 2:  _4/_5  --k2-->  _6/_7
 level 3:  _6/_7  --k3-->  _8/_9
 level L:  _(2L)/_(2L+1)  --kL-->  _(2L+2)/_(2L+3)
@@ -94,22 +95,23 @@ In the diagram (regenerate with `make_anchor_diagram.py`):
 - **red** — where the arm ended before retraction.
 - **dashed** — the anchor distance, what the search no longer has to spend.
 
-On 2×2 LH `k = 1` those distances come out `84.4 … 86.0px` per arm, against a
-flat `RETRACT` of `52.0` for all of them. They differ arm by arm, which is the
-point: each arm is anchored to its own feature, not to a shared constant.
+On the 2×2 LH starting stitch those distances are `84px` per arm, against a
+flat `RETRACT` of `52px`. On rotated outer rings they can differ arm by arm,
+which is the point: every arm is anchored to its own geometric feature, not to
+a shared constant.
 
 `crossing_anchors()` reads the two bands off the geometry as the ring's two
 *direction families* (§6), so it needs no relabel algebra and works at any level
 and any `k`. An arm that crosses nothing keeps the flat `RETRACT` fallback.
 
-It reaches further with less. On 2×2 LH `ks = [1, 1]`, level 2 moves from
-extensions of `(240, 230)` and `(290, 290)` to `(90, 70)` on both bands, gaps
-`56.66/56.03 → 56.58/56.60`. The third twist at `k = −1` then settles on
-`(80, 60)` — the same extensions the *first* twist uses.
+The rule starts at L0 → L1, not only on later rings. On 2×2 LH
+`ks = [1, 1, −1]`, L1 settles at `(40, 10)` / `(170, 150)`, L2 at
+`(150, 100)` on both bands, and L3 at `(30, 110)` on both bands. All of those
+numbers are measured from the purple points.
 
 Two consequences worth holding on to:
 
-- An extension of `(80, 60)` at level 3 means *80px and 60px out from the purple
+- An extension of `(30, 110)` at level 3 means *30px and 110px out from the purple
   points*, not from anywhere else. Extension numbers across levels are only
   comparable because they share this origin.
 - The pair still slides along **its own parent's axis**, one shared value per
@@ -140,7 +142,8 @@ strand_width * 1.5]` = `[56, 69]`.
 
 An aligned ring is geometrically another starting-stitch ring, so a level-L
 twist at rotation `k` is — in its virtual frame — the same problem level 1
-solves at that `k`. `align_continuation_level` therefore takes
+solves at that `k`. Level 1 itself is produced by `build_level_one`, which calls
+`add_continuation_level` on the L0 snapshot. `align_continuation_level` takes
 `seed_extensions`, a list of `(h_combo, v_combo)` pairs. The driver passes,
 first, **level 1's own solution for the level's k** (computed once per
 distinct k on a fresh starting stitch), then the chain's earlier winners, most
@@ -157,13 +160,11 @@ families:
    likes are simply out of reach of that grid.
 
 The first attempt whose ring is complete wins and the full escalation search
-is skipped. This is what keeps deep extensions at level-1 scale: on 2×2
-`[1, 1, −1]` the unseeded search sends level 3 to `(20, 190)`, while the seed
-built from level 1's `k = −1` answer `(0, 70)` lands `(40, 70)` — same weave,
-arms a third as long — and a six-level chain runs in ~6 s with every level in
-the 20–90px range. If no seed produces a complete ring the normal search runs
-unchanged, so seeding can only shorten and speed a level, never change what is
-reachable. A seeded level reports `seeded` in the audit's last column.
+is skipped. This keeps deep extensions near a previously successful scale and
+avoids needless long-arm optima. If no seed produces a complete ring the normal
+search runs unchanged, so seeding can only shorten and speed a level, never
+change what is reachable. A seeded level reports `seeded` in the audit's last
+column.
 
 ### The angle window
 
@@ -255,8 +256,8 @@ one the search would pick, by listening to the engine's `on_config_callback` and
 keeping the best-variance instance of the target combo. The grid is sized to
 contain the target exactly: step = `gcd` of its values, ceiling = its maximum.
 
-Applies to levels ≥ 2 on square sizes only (`mirror_sides`). Level 1 must
-reproduce the published twist exactly.
+Applies to levels ≥ 2 on square sizes only (`mirror_sides`). Level 1 uses the
+same crossing-anchor origin but does not apply this optional mirroring pass.
 
 ## 9. Re-laying the masks
 

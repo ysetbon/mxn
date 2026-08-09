@@ -21,13 +21,13 @@ where the algorithm currently gives out.
 
 ## The one-paragraph version
 
-A starting stitch is a core (`_1`) with a ring of arms around it (`_2/_3`). The
-level-1 generators grow one more ring onto that (`_4/_5`) for a rotation `k`, and
-align it so the arms form parallel bands with even gaps. An aligned ring is,
-geometrically, just another starting-stitch ring — so this module *renames* it
-into `_2/_3`, runs the same machinery, and renames the result back out. That
-recursion is the whole idea; everything else is the corrections needed to keep it
-honest as the stitch grows.
+A starting stitch is a core (`_1`) with a ring of arms around it (`_2/_3`).
+`build_level_one` retracts those arms to their outermost cross-band crossings
+(the purple points), grows `_4/_5` there, and aligns the new ring. An aligned
+ring is geometrically another starting-stitch ring, so the same constructor is
+reused at every depth through a virtual `_2/_3` relabel. That recursion is the
+whole idea; everything else keeps the relabel, masks and search honest as the
+stitch grows.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ python3 continuation/make_diagrams.py --m 2 --n 2 --ks 1 1 -1 --render --out /tm
 Every level prints one line:
 
 ```
-L3 k=-1 ok/ok  gap 56.91/56.89  ext (20,190)(20,190)
+L3 k=-1 ok/ok  gap 58.87/58.23  ext (30,110)(30,110)
        across 16/16  within 0  masks 8  stray 0  broken 0   k-based groups   WEAVE
 ```
 

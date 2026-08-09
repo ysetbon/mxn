@@ -14,7 +14,6 @@ import argparse, contextlib, io, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
 import mxn_continuation_next as NX
-from ui_utils import _get_active_strands
 
 HORIZ_HEX = ['#FFFFFF', '#55AA00']
 VERT_HEX = ['#3D3A8C', '#7B71D6']
@@ -35,18 +34,12 @@ def strand_level(s):
 
 
 def build_sequence(ks):
-    engine = NX.get_engine("lh")
     buf = io.StringIO()
     stages = []
     with contextlib.redirect_stdout(buf):
-        strands = _get_active_strands(
-            json.loads(engine.generate_json(2, 2, ks[0], "cw")))
-        r2v, v2r = NX._identity_relabel("lh", 2, 2)
-        prev_v2r = v2r
-        info1 = {"level": 1, "k": ks[0], "real_to_virtual": r2v,
-                 "virtual_to_real": v2r,
-                 "new_masks": [s for s in strands if s.get("type") == "MaskedStrand"
-                               and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]}
+        _starting, strands, info1 = NX.build_level_one(
+            2, 2, ks[0], "lh", "cw", verbose=False)
+        prev_v2r = info1["virtual_to_real"]
         res = NX.align_continuation_level(strands, 2, 2, ks[0], "cw", "lh", 1, info1)
         stages.append(("L1", [json.loads(json.dumps(s)) for s in strands]))
         stats = [stat_row(res, 1, ks[0])]
@@ -56,16 +49,10 @@ def build_sequence(ks):
         for level in range(2, len(ks) + 1):
             k_level = ks[level - 1]
             if k_level not in level1_for_k:
-                s1 = _get_active_strands(
-                    json.loads(engine.generate_json(2, 2, k_level, "cw")))
-                a, b = NX._identity_relabel("lh", 2, 2)
+                _starting, s1, info_k = NX.build_level_one(
+                    2, 2, k_level, "lh", "cw", verbose=False)
                 r1 = NX.align_continuation_level(
-                    s1, 2, 2, k_level, "cw", "lh", 1,
-                    {"level": 1, "k": k_level, "real_to_virtual": a,
-                     "virtual_to_real": b,
-                     "new_masks": [s for s in s1 if s.get("type") == "MaskedStrand"
-                                   and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]},
-                    verbose=False)
+                    s1, 2, 2, k_level, "cw", "lh", 1, info_k, verbose=False)
                 level1_for_k[k_level] = (
                     tuple(r1["horizontal"].get("pair_extensions") or ()),
                     tuple(r1["vertical"].get("pair_extensions") or ()))

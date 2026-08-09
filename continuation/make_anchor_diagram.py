@@ -15,7 +15,6 @@ Writes an SVG next to this script. Run:
 import argparse
 import contextlib
 import io
-import json
 import math
 import os
 import sys
@@ -24,7 +23,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
 
 import mxn_continuation_next as NX
-from ui_utils import _get_active_strands
 
 BAND_A = "#E0913F"
 BAND_B = "#3FA5A0"
@@ -35,15 +33,11 @@ INK = "#8A97A0"
 
 def build(m, n, k, hand, direction):
     """Level 1, aligned -- the ring a second level would be welded onto."""
-    engine = NX.get_engine(hand)
     with contextlib.redirect_stdout(io.StringIO()):
-        strands = _get_active_strands(
-            json.loads(engine.generate_json(m, n, k, direction)))
-        real_to_virtual, virtual_to_real = NX._identity_relabel(hand, m, n)
+        _starting, strands, info = NX.build_level_one(
+            m, n, k, hand, direction, verbose=False)
         NX.align_continuation_level(
-            strands, m, n, k, direction, hand, 1,
-            {"level": 1, "k": k, "real_to_virtual": real_to_virtual,
-             "virtual_to_real": virtual_to_real, "new_masks": []}, verbose=False)
+            strands, m, n, k, direction, hand, 1, info, verbose=False)
     return {s["layer_name"]: s for s in strands
             if s.get("type") == "AttachedStrand"
             and s["layer_name"].endswith(("_4", "_5"))}

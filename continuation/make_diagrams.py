@@ -23,7 +23,6 @@ SRC = os.path.join(os.path.dirname(HERE), "src")
 sys.path.insert(0, SRC)
 
 import mxn_continuation_next as NX
-from ui_utils import _get_active_strands
 
 
 def audit(strands, level):
@@ -121,7 +120,7 @@ def describe(result, strands, level, k, expected):
             "broken": broken, "applied": applied, "healthy": healthy}
 
 
-def level1_extensions(engine, m, n, k, hand, direction):
+def level1_extensions(m, n, k, hand, direction):
     """
     The extensions level 1 settles on for this k, on a fresh starting stitch.
 
@@ -133,22 +132,16 @@ def level1_extensions(engine, m, n, k, hand, direction):
     """
     if k == 0:
         return None
-    strands = _get_active_strands(
-        json.loads(engine.generate_json(m, n, k, direction)))
-    r2v, v2r = NX._identity_relabel(hand, m, n)
+    _starting, strands, info = NX.build_level_one(
+        m, n, k, hand, direction, verbose=False)
     res = NX.align_continuation_level(
-        strands, m, n, k, direction, hand, 1,
-        {"level": 1, "k": k, "real_to_virtual": r2v, "virtual_to_real": v2r,
-         "new_masks": [s for s in strands if s.get("type") == "MaskedStrand"
-                       and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]},
-        verbose=False)
+        strands, m, n, k, direction, hand, 1, info, verbose=False)
     h = tuple(res["horizontal"].get("pair_extensions") or ())
     v = tuple(res["vertical"].get("pair_extensions") or ())
     return (h, v) if h and v else None
 
 
 def run(m, n, ks, hand, direction, render, out_dir):
-    engine = NX.get_engine(hand)
     expected = (m * 2) * (n * 2)
     started = time.time()
     rows, stages = [], []
@@ -157,19 +150,14 @@ def run(m, n, ks, hand, direction, render, out_dir):
           f"(a healthy ring: across {expected}, within 0, stray 0) ===")
 
     with contextlib.redirect_stdout(io.StringIO()):
-        strands = _get_active_strands(
-            json.loads(engine.generate_json(m, n, ks[0], direction)))
+        starting_json, strands, level1_info = NX.build_level_one(
+            m, n, ks[0], hand, direction, verbose=False)
         stages.append({"level": 0, "k": None, "label": "starting stitch",
-                       "json": NX.build_starting_stitch_json(
-                           m, n, hand, reference_strands=strands)})
-        real_to_virtual, virtual_to_real = NX._identity_relabel(hand, m, n)
+                       "json": starting_json})
+        virtual_to_real = level1_info["virtual_to_real"]
         result = NX.align_continuation_level(
             strands, m, n, ks[0], direction, hand, 1,
-            {"level": 1, "k": ks[0], "real_to_virtual": real_to_virtual,
-             "virtual_to_real": virtual_to_real,
-             "new_masks": [s for s in strands if s.get("type") == "MaskedStrand"
-                           and NX._is_level_mask(s.get("layer_name", ""), 4, 5)]},
-            verbose=False)
+            level1_info, verbose=False)
         stages.append({"level": 1, "k": ks[0], "label": "1st twist",
                        "json": NX._snapshot_json(strands)})
         snapshot = [dict(s) for s in strands]
@@ -189,7 +177,7 @@ def run(m, n, ks, hand, direction, render, out_dir):
         with contextlib.redirect_stdout(io.StringIO()):
             if k_level not in level1_for_k:
                 level1_for_k[k_level] = level1_extensions(
-                    engine, m, n, k_level, hand, direction)
+                    m, n, k_level, hand, direction)
             k_seed = level1_for_k[k_level]
             level_seeds = ([k_seed] if k_seed else []) + list(reversed(seeds))
             strands, info = NX.add_continuation_level(
