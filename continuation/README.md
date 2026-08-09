@@ -15,6 +15,9 @@ where the algorithm currently gives out.
   here so the folder can be read on its own.
 - **`make_diagrams.py`** — the driver. It imports from `src/`, so it always runs
   the live algorithm.
+- **[docs/](docs/README.md)** — rendered sequences: per-level SVG frames (they
+  display right on GitHub) and self-contained HTML sheets, drawn by
+  **`render_svg.py`** straight from the strand JSON, no OpenStrandStudio needed.
 
 ## The one-paragraph version
 
