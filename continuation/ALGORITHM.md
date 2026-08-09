@@ -241,9 +241,17 @@ levels that already work never reach the retry.
 
 ## 8. Mirroring the bands
 
-A square stitch should be symmetric, and on 2×2 it comes out that way unprompted
-— every level lands on the same combo for H and V. On 3×3 the bands disagree, and
-the one that stayed nearer its anchor is the one that looks right.
+A square stitch has 90-degree rotational symmetry, so corresponding H/V pairs
+must use the same extension tuple. At level 1 the optimizer searches H at full
+precision, then pins V to that exact tuple and solves only its 90-degree-rotated
+heading. This both enforces the geometry and avoids a second exhaustive search.
+At deeper levels `_mirror_extensions` tries both bands as the shared donor and
+keeps the complete symmetric weave.
+
+The verified 2×2 LH/CW L1 `k = 1` solution, `H = V = (40, 10)`, is stored in
+`LEVEL_ONE_DEFAULT_SOLUTIONS`. It is used as an exact seed: headings, crossings,
+masks and the weave audit are still solved, but the known extension grid is not
+searched again. Other `(m, n, k, hand, direction)` cases keep the full search.
 
 `_mirror_extensions` copies the near band's combo onto the far one and keeps it
 if the ring is no worse. The near band's combo is not always *legal* on the other
@@ -256,8 +264,8 @@ one the search would pick, by listening to the engine's `on_config_callback` and
 keeping the best-variance instance of the target combo. The grid is sized to
 contain the target exactly: step = `gcd` of its values, ceiling = its maximum.
 
-Applies to levels ≥ 2 on square sizes only (`mirror_sides`). Level 1 uses the
-same crossing-anchor origin but does not apply this optional mirroring pass.
+Applies to every level on square sizes by default (`mirror_sides`). Rectangular
+stitches continue to optimize H and V independently.
 
 ## 9. Re-laying the masks
 

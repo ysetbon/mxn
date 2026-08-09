@@ -129,6 +129,67 @@ def render(strands, view, label, max_level, idp):
            f'viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" width="100%" '
            f'style="height:auto;display:block">']
 
+    def band_path(s, width):
+        """Closed flat-cap band matching QPainterPathStroker.FlatCap."""
+        ax, ay = s["start"]["x"], s["start"]["y"]
+        bx, by = s["end"]["x"], s["end"]["y"]
+        dx, dy = bx - ax, by - ay
+        length = (dx * dx + dy * dy) ** 0.5 or 1.0
+        nx, ny = -dy / length * width / 2, dx / length * width / 2
+        return (f'M {ax+nx:.2f},{ay+ny:.2f} L {bx+nx:.2f},{by+ny:.2f} '
+                f'L {bx-nx:.2f},{by-ny:.2f} L {ax-nx:.2f},{ay-ny:.2f} Z')
+
+    def shape_parts(s, width, color, clip_id=None, mask_geometry=False,
+                    draw_side_lines=False):
+        """Return one unified SVG paint layer for a strand body and its caps.
+
+        Mask geometry follows OpenStrandStudio: only an AttachedStrand's
+        visible start cap participates in the path intersection. Regular
+        strand painting keeps the endpoint flags from the JSON.
+        """
+        ax, ay = s["start"]["x"], s["start"]["y"]
+        bx, by = s["end"]["x"], s["end"]["y"]
+        clip = f' clip-path="url(#{clip_id})"' if clip_id else ""
+        parts = [f"<g{clip}>"]
+        if mask_geometry:
+            circle_indexes = (0,) if (s.get("type") == "AttachedStrand"
+                                      and s.get("has_circles", [False])[0]) else ()
+        else:
+            circle_indexes = tuple(i for i, visible in
+                                   enumerate(s.get("has_circles", [False, False]))
+                                   if visible)
+        for i in circle_indexes:
+            cx, cy = (ax, ay) if i == 0 else (bx, by)
+            parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{width/2:.2f}" fill="{color}"/>')
+        parts.append(f'<path d="{band_path(s, width)}" fill="{color}"/>')
+
+        if draw_side_lines:
+            dx, dy = bx - ax, by - ay
+            length = (dx * dx + dy * dy) ** 0.5 or 1.0
+            ux, uy = dx / length, dy / length
+            px, py = -uy, ux
+            half_total = (s["width"] + 2 * s["stroke_width"]) / 2
+            shift = s["stroke_width"] / 2
+
+            def side_line(anchor_x, anchor_y, direction):
+                cx = anchor_x + ux * shift * direction
+                cy = anchor_y + uy * shift * direction
+                return (f'<line x1="{cx-px*half_total:.2f}" y1="{cy-py*half_total:.2f}" '
+                        f'x2="{cx+px*half_total:.2f}" y2="{cy+py*half_total:.2f}" '
+                        f'stroke="black" stroke-width="{s["stroke_width"]:.2f}" '
+                        f'stroke-linecap="butt"/>')
+
+            circles = s.get("has_circles", [False, False])
+            if (s.get("type") == "Strand"
+                    and s.get("start_line_visible", True)
+                    and not circles[0]):
+                parts.append(side_line(ax, ay, -1))
+            if s.get("end_line_visible", True) and not circles[1]:
+                parts.append(side_line(bx, by, 1))
+
+        parts.append("</g>")
+        return "".join(parts)
+
     out.append("<defs>")
     for s in strands:
         if s.get("type") != "MaskedStrand" or strand_level(s) > max_level:
@@ -136,48 +197,52 @@ def render(strands, view, label, max_level, idp):
         second = by_name.get(s["second_selected_strand"])
         if second is None:
             continue
-        bw = second["width"] + 2 * second["stroke_width"]
-        out.append(
-            f'<mask id="{idp}m_{s["layer_name"]}" maskUnits="userSpaceOnUse" '
-            f'x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}">'
-            f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}" fill="black"/>'
-            f'<line x1="{second["start"]["x"]:.2f}" y1="{second["start"]["y"]:.2f}" '
-            f'x2="{second["end"]["x"]:.2f}" y2="{second["end"]["y"]:.2f}" '
-            f'stroke="white" stroke-width="{bw}" stroke-linecap="butt"/></mask>')
+        outer_width = second["width"] + 2 * second["stroke_width"]
+        for suffix, clip_width in (("stroke", outer_width), ("fill", outer_width + 4)):
+            clip_id = f'{idp}m_{s["layer_name"]}_{suffix}'
+            out.append(f'<clipPath id="{clip_id}" clipPathUnits="userSpaceOnUse">')
+            # A clip path is the union of its children. Use the same flat body
+            # plus visible AttachedStrand start cap as MaskedStrand.get_*_path.
+            ax, ay = second["start"]["x"], second["start"]["y"]
+            bx, by = second["end"]["x"], second["end"]["y"]
+            out.append(f'<path d="{band_path(second, clip_width)}" fill="white"/>')
+
+            if (second.get("type") == "AttachedStrand"
+                    and second.get("has_circles", [False])[0]):
+                out.append(f'<circle cx="{ax:.2f}" cy="{ay:.2f}" r="{clip_width/2:.2f}" fill="white"/>')
+            out.append("</clipPath>")
     out.append("</defs>")
 
-    def body(s, mask=None):
-        ax, ay = s["start"]["x"], s["start"]["y"]
-        bx, by = s["end"]["x"], s["end"]["y"]
-        col = color_for(s, vert)
-        sw, wid = s["stroke_width"], s["width"]
-        attr = f' mask="url(#{idp}m_{mask})"' if mask else ""
-        parts = [f"<g{attr}>"]
-        for i, has in enumerate(s.get("has_circles", [False, False])):
-            if not has:
-                continue
-            cx, cy = (ax, ay) if i == 0 else (bx, by)
-            parts.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid/2+sw:.2f}" fill="black"/>'
-                         f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid/2:.2f}" fill="{col}"/>')
-        parts.append(f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-                     f'stroke="black" stroke-width="{wid+2*sw}" stroke-linecap="butt"/>')
-        parts.append(f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-                     f'stroke="{col}" stroke-width="{wid}" stroke-linecap="butt"/>')
-        parts.append("</g>")
-        return "".join(parts)
-
     for lvl in range(0, max_level + 1):
-        for masked in (False, True):
-            for s in strands:
-                if (s.get("type") == "MaskedStrand") != masked or strand_level(s) != lvl:
-                    continue
-                if masked:
-                    first = by_name.get(s["first_selected_strand"])
-                    if first is not None:
-                        out.append(body(first, mask=s["layer_name"]))
-                else:
-                    out.append(body(s))
-
+        # OpenStrandStudio completes a level's ordinary strands, then paints
+        # its MaskedStrand intersections on top before the next level begins.
+        for s in strands:
+            if s.get("type") == "MaskedStrand" or strand_level(s) != lvl:
+                continue
+            col = color_for(s, vert)
+            out.append(shape_parts(s, s["width"] + 2 * s["stroke_width"], "black"))
+            out.append(shape_parts(s, s["width"], col, draw_side_lines=True))
+        for s in strands:
+            if s.get("type") != "MaskedStrand" or strand_level(s) != lvl:
+                continue
+            first = by_name.get(s["first_selected_strand"])
+            if first is None:
+                continue
+            col = color_for(first, vert)
+            out.append(shape_parts(
+                first,
+                first["width"] + 2 * first["stroke_width"],
+                "black",
+                f'{idp}m_{s["layer_name"]}_stroke',
+                mask_geometry=True,
+            ))
+            out.append(shape_parts(
+                first,
+                first["width"],
+                col,
+                f'{idp}m_{s["layer_name"]}_fill',
+                mask_geometry=True,
+            ))
     # label the newest ring's arms
     da, db = 2 * max_level + 2, 2 * max_level + 3
     for s in strands:

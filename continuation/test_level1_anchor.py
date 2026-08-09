@@ -49,8 +49,61 @@ class LevelOneAnchorTests(unittest.TestCase):
             self.assertEqual(len(children), 1, name)
             self.assertEqual(children[0]["start"], purple, name)
 
+    def test_square_level_uses_same_extensions_at_ninety_degrees(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = NX.align_continuation_level(
+                self.strands, 2, 2, 1, "cw", "lh", 1, self.info,
+                verbose=False)
+
+        horizontal = tuple(result["horizontal"]["pair_extensions"])
+        vertical = tuple(result["vertical"]["pair_extensions"])
+        self.assertEqual(horizontal, vertical)
+
+        h_angle = result["horizontal"]["angle_degrees"]
+        v_angle = result["vertical"]["angle_degrees"]
+        angle_delta = abs(((v_angle - h_angle + 180.0) % 360.0) - 180.0)
+        self.assertAlmostEqual(angle_delta, 90.0, delta=0.1)
+
+    def test_repeated_even_k_swaps_square_orientation(self):
+        """A repeated even k must exchange square H/V families at L3."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            NX.align_continuation_level(
+                self.strands, 2, 2, 1, "cw", "lh", 1, self.info,
+                seed_extensions=[((40, 10), (40, 10))], verbose=False)
+            strands, level2 = NX.add_continuation_level(
+                self.strands, 2, 2, 2, "cw", "lh", 2,
+                k_prev=1,
+                prev_virtual_to_real=self.info["virtual_to_real"],
+                verbose=False)
+            level2_result = NX.align_continuation_level(
+                strands, 2, 2, 2, "cw", "lh", 2, level2,
+                seed_extensions=[((50, 60), (50, 60))], verbose=False)
+            strands, level3 = NX.add_continuation_level(
+                strands, 2, 2, 2, "cw", "lh", 3,
+                k_prev=2,
+                prev_virtual_to_real=level2["virtual_to_real"],
+                verbose=False)
+            level3_result = NX.align_continuation_level(
+                strands, 2, 2, 2, "cw", "lh", 3, level3,
+                seed_extensions=[
+                    ((50, 60), (50, 60)),
+                    ((40, 10), (40, 10)),
+                ],
+                verbose=False)
+
+        horizontal = tuple(level3_result["horizontal"]["pair_extensions"])
+        vertical = tuple(level3_result["vertical"]["pair_extensions"])
+        virtual, _ = NX._build_virtual_view(strands, level3, 3)
+        self.assertTrue(level2_result["horizontal"]["success"])
+        self.assertTrue(level3_result["horizontal"]["success"])
+        self.assertTrue(level3_result["vertical"]["success"])
+        self.assertEqual(horizontal, vertical)
+        self.assertEqual(NX._ring_crossings(virtual), 16)
+
     def test_level_one_uses_generic_continuation_metadata(self):
         self.assertEqual(self.info["level"], 1)
+        self.assertEqual(self.info["seed_extensions"], [
+            ((40, 10), (40, 10))])
         self.assertEqual(len(self.info["new_strands"]), 8)
         self.assertEqual(len(self.info["new_masks"]), 8)
         self.assertEqual(set(self.info["real_to_virtual"]), {

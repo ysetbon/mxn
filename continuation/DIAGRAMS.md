@@ -11,11 +11,11 @@ One `k` per level. `--ks 1 1 -1` means: first twist at `k = 1`, second at
 
 ```
 === 2x2 lh cw ks=[1, 1, -1]   (a healthy ring: across 16, within 0, stray 0) ===
-  L1 k=1  ok/ok  gap   56.30/56.81   ext (40, 10)(170, 150)
+  L1 k=1  ok/ok  gap   56.30/56.29   ext (40, 10)(40, 10)
         across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
-  L2 k=1  ok/ok  gap   56.80/65.94   ext (150, 100)(150, 100)
+  L2 k=1  ok/ok  gap   57.40/57.41   ext (60, 30)(60, 30)
         across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
-  L3 k=-1 ok/ok  gap   58.87/58.23   ext (30, 110)(30, 110)
+  L3 k=-1 ok/ok  gap   57.36/57.36   ext (30, 110)(30, 110)
         across  16/16  within  0  masks  8  stray  0  broken  0   k-based groups   WEAVE
 ```
 
