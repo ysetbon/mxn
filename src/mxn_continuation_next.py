@@ -332,6 +332,14 @@ def build_level_relabel(hand, m, n, k_prev, direction, level,
     h_real = [to_source(lbl) for lbl in h_prev]
     v_real = [to_source(lbl) for lbl in v_prev]
 
+    # On a square ring, every non-zero even rotation exchanges the two
+    # perpendicular direction families. Carry that orientation change into
+    # the next virtual starting stitch; otherwise a repeated even k asks each
+    # search group to align arms from both physical bands and the extension
+    # search can grow forever without finding a weave.
+    if m == n and k_prev != 0 and k_prev % 2 == 0:
+        h_real, v_real = v_real, h_real
+
     h_canon, v_canon = canonical_orders(hand, m, n)
     if len(h_real) != len(h_canon) or len(v_real) != len(v_canon):
         raise ValueError(
