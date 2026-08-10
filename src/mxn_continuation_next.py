@@ -120,6 +120,12 @@ LEVEL_ONE_DEFAULT_SOLUTIONS = {
 }
 # Finest extension grid first; the search costs (ext_max/step + 1) ** pairs, so
 # coarsen only as far as the combo budget forces.
+#
+# 5 is deliberately NOT here. Adding it changes what `auto` picks for every
+# existing stitch -- on 2x2 it quadruples the grid and the finer sweep surfaces
+# degenerate combos the coarse one never reached (measured: k=-1 fell to
+# (85, 0) and stopped being a weave). A finer grid stays reachable by passing
+# pair_extension_step explicitly.
 EXT_STEPS = [10, 20, 25, 40, 50, 100]
 COMBO_BUDGET = 400_000
 # Every ring past the first sits further out, so its arms need to reach further
@@ -1239,7 +1245,8 @@ def _mirror_extensions(attempt, chosen, plan, expected, sides, verbose):
     return None
 
 
-def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label):
+def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label,
+                  budget=None):
     """
     Run one group's alignment, growing the extension ceiling while the winner
     is pinned against it.
@@ -1265,9 +1272,14 @@ def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label
     attempts = []
     for index, ceiling in enumerate(ceilings):
         if fixed_step is None:
-            step, combos = pick_extension_step(pairs, ceiling)
+            step, combos = pick_extension_step(
+                pairs, ceiling, COMBO_BUDGET if budget is None else budget)
         else:
             step = int(fixed_step)
+            # The engine walks range(0, ceiling + step, step), so a step that
+            # does not divide the ceiling overshoots it. Round the ceiling up to
+            # the grid instead, so the reported combo count is the real one.
+            ceiling = -(-int(ceiling) // step) * step
             combos = (ceiling // step + 1) ** pairs
 
         result = run(ceiling, step)
@@ -1305,6 +1317,107 @@ def _search_group(run, pairs, base_ceiling, fixed_step, escalate, verbose, label
     return chosen["result"], chosen["settings"]
 
 
+# How many valid configurations a single band keeps for browsing. The engine
+# enumerates every one of them anyway; this only bounds what we hold on to.
+BAND_CANDIDATE_CAP = 2000
+
+
+def _reseat_masks(strands, level_info):
+    """Masks copy the geometry of the strand they sit on."""
+    by_name = {s["layer_name"]: s for s in strands}
+    for mask in level_info["new_masks"]:
+        owner = by_name.get(mask.get("first_selected_strand"))
+        if owner is not None:
+            mask["start"] = copy.deepcopy(owner["start"])
+            mask["end"] = copy.deepcopy(owner["end"])
+            mask["control_point_center"] = {
+                "x": (owner["start"]["x"] + owner["end"]["x"]) / 2.0,
+                "y": (owner["start"]["y"] + owner["end"]["y"]) / 2.0,
+            }
+
+
+def _project_candidate(extensions, angle_degrees, result):
+    """
+    The smallest record that can rebuild one band's geometry later.
+
+    `result["configurations"]` carries a deep copy of every strand dict, which
+    is far too heavy to keep one of per valid combo. Everything
+    apply_parallel_alignment actually writes is derived from two points per arm,
+    so keep only those and recompute the rest on replay.
+    """
+    moves = []
+    for config in result.get("configurations") or []:
+        strand = config.get("strand") or {}
+        name_45 = (strand.get("strand_4_5") or {}).get("layer_name")
+        name_23 = (strand.get("strand_2_3") or {}).get("layer_name")
+        start, end = config.get("extended_start"), config.get("end")
+        if not (name_45 and start and end):
+            continue
+        moves.append((name_45, name_23,
+                      float(start["x"]), float(start["y"]),
+                      float(end["x"]), float(end["y"])))
+    return {
+        "ext": tuple(int(e) for e in (extensions or ())),
+        "angle": angle_degrees,
+        "gap": result.get("average_gap"),
+        "var": result.get("gap_variance"),
+        "fld": result.get("first_last_distance"),
+        "moves": moves,
+    }
+
+
+def _apply_candidate(strand_list, candidate):
+    """Replay a projected candidate onto a virtual view.
+
+    Mirrors apply_parallel_alignment: the arm takes the extended start and the
+    end, its parent's end is pulled to meet it, and both control points follow.
+    """
+    by_name = {s["layer_name"]: s for s in strand_list}
+    for name_45, name_23, sx, sy, ex, ey in candidate.get("moves") or []:
+        arm = by_name.get(name_45)
+        if arm is not None:
+            arm["start"] = {"x": sx, "y": sy}
+            arm["end"] = {"x": ex, "y": ey}
+            arm["control_points"] = [{"x": sx, "y": sy}, {"x": ex, "y": ey}]
+            arm["control_point_center"] = {"x": (sx + ex) / 2.0, "y": (sy + ey) / 2.0}
+        parent = by_name.get(name_23)
+        if parent is not None:
+            parent["end"] = {"x": sx, "y": sy}
+            points = parent.get("control_points")
+            if points and len(points) > 1:
+                points[1] = {"x": sx, "y": sy}
+            parent["control_point_center"] = {
+                "x": (parent["start"]["x"] + sx) / 2.0,
+                "y": (parent["start"]["y"] + sy) / 2.0,
+            }
+    return strand_list
+
+
+def apply_solution(strands, level_info, level, m, n, hand, h_cand, v_cand):
+    """
+    Rebuild one level's ring from a chosen H and V candidate pair.
+
+    The two bands are searched in sequence but are independent -- the V search
+    reads only the V arms and their own parents -- so any (H, V) pair is a
+    reachable configuration. What is NOT independent is whether the ring closes,
+    which is why the joint crossing count is measured here and returned for the
+    caller to accept or reject.
+
+    Returns the crossing score the ring scored.
+    """
+    working, back = _build_virtual_view(strands, level_info, level)
+    for candidate in (h_cand, v_cand):
+        if candidate:
+            _apply_candidate(working, candidate)
+    crossings = _ring_crossings(working, sizes=(2 * m, 2 * n))
+    for v_strand in working:
+        real = back.get(v_strand["layer_name"])
+        if real is not None:
+            _copy_geometry(v_strand, real)
+    _reseat_masks(strands, level_info)
+    return crossings
+
+
 def align_continuation_level(strands, m, n, k, direction, hand, level, level_info,
                              angle_step_degrees=ANGLE_STEP_DEGREES,
                              max_extension=MAX_EXTENSION,
@@ -1313,7 +1426,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                              pair_extension_step=None, use_gpu=False,
                              angle_mode=ANGLE_MODE, escalate_extension=None,
                              mirror_sides=None, seed_extensions=None,
-                             verbose=True):
+                             prefer_short_arms=True, combo_budget=None,
+                             collect_candidates=False, verbose=True):
     """
     Run the engine's parallel alignment on one continuation level.
 
@@ -1377,7 +1491,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     rescue = _plan_family_rescue(virtual_list, h_order, v_order)
     expected_crossings = len(h_order) * len(v_order)
 
-    def attempt(plan, force=(None, None), bound=None):
+    def attempt(plan, force=(None, None), bound=None, short_arms=None):
         """
         Align the level once, either with the engine's k-based groups (plan None)
         or with the direction families, and report the ring it produced.
@@ -1388,6 +1502,24 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         seeding to look NEAR a known combo without letting the arms run long.
         """
         working, back = _build_virtual_view(strands, level_info, level)
+
+        use_short = prefer_short_arms if short_arms is None else short_arms
+
+        # The engine already fires on_config_callback once per valid combo, in
+        # combo order, so browsing costs no extra search -- only the projection.
+        # _search_group may return a NON-last ceiling's attempt, so bucket by
+        # the grid the candidates came from and pick the matching bucket after.
+        buckets = {}
+
+        def make_grab(grab_label, ceiling, step):
+            if not collect_candidates:
+                return None
+            bucket = buckets.setdefault((grab_label, int(ceiling), int(step)), [])
+
+            def grab(angle_degrees, extensions, result, _direction):
+                if len(bucket) < BAND_CANDIDATE_CAP:
+                    bucket.append(_project_candidate(extensions, angle_degrees, result))
+            return grab
 
         def align_h(ceiling, step, window, grab=None):
             lo, hi = window if window else (None, None)
@@ -1403,6 +1535,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 m=m, k=k, direction=direction,
                 use_gpu=use_gpu,
                 angle_mode=angle_mode,
+                prefer_short_arms=use_short,
             )
 
         def align_v(ceiling, step, window, grab=None):
@@ -1419,6 +1552,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 k=k, direction=direction,
                 use_gpu=use_gpu,
                 angle_mode=angle_mode,
+                prefer_short_arms=use_short,
             )
 
         if plan is None:
@@ -1457,7 +1591,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                         return None
                 elif bound is not None:
                     b_ceiling, b_step = bound
-                    res = align(b_ceiling, b_step, window)
+                    res = align(b_ceiling, b_step, window,
+                                make_grab(label, b_ceiling, b_step))
                     if not res.get("success"):
                         return None
                     sett = {"ceiling": b_ceiling, "step": b_step, "pairs": pairs,
@@ -1465,10 +1600,12 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                             "attempts": 1, "pinned": False, "bounded": True}
                 else:
                     res, sett = _search_group(
-                        lambda ceiling, step, _a=align, _w=window: _a(ceiling, step, _w),
+                        lambda ceiling, step, _a=align, _w=window, _l=label:
+                            _a(ceiling, step, _w, make_grab(_l, ceiling, step)),
                         pairs, max_pair_extension, pair_extension_step,
                         escalate_extension, verbose,
-                        label if plan is None else f"{label}*")
+                        label if plan is None else f"{label}*",
+                        budget=combo_budget)
                 if plan is not None:
                     sett["rescued"] = True
                     sett["family"] = list(order)
@@ -1481,9 +1618,15 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
             if restore is not None:
                 engine._build_k_based_strand_sets = restore
 
+        def bucket_for(grab_label, sett):
+            return buckets.get((grab_label, int(sett.get("ceiling") or 0),
+                                int(sett.get("step") or 0)), [])
+
         return {"h": results[0], "v": results[1],
                 "h_settings": settings[0], "v_settings": settings[1],
                 "virtual_list": working, "back_map": back,
+                "h_cands": bucket_for("H", settings[0]),
+                "v_cands": bucket_for("V", settings[1]),
                 "crossings": _ring_crossings(working, sizes=(2 * m, 2 * n))}
 
     chosen, plan_used = None, None
@@ -1544,6 +1687,25 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
             print(f"    direction families gave {alt['crossings']}"
                   f"/{expected_crossings} — keeping the k-based result")
 
+    # Shorter arms are a preference, never a trade against the weave itself.
+    #
+    # `_select_best_result` chooses per band, on that band's own gap geometry,
+    # but whether the ring closes is a JOINT property of both bands and is only
+    # tested here. So a shorter per-band pick can quietly cost crossings --
+    # measured on 1x2/2x1/1x3 k=1, which fell from complete rings to 6/8 and
+    # 7/12 once the short-arm tie-break was on. Re-run without the preference
+    # whenever it costs crossings and keep whichever ring is more complete.
+    if prefer_short_arms and chosen["crossings"] < expected_crossings:
+        if verbose:
+            print(f"    short arms gave {chosen['crossings']}/{expected_crossings} "
+                  f"crossings -- retrying on lowest variance")
+        steady = attempt(plan_used, short_arms=False)
+        if steady is not None and steady["crossings"] > chosen["crossings"]:
+            if verbose:
+                print(f"    lowest variance gave {steady['crossings']}"
+                      f"/{expected_crossings} -- taking it")
+            chosen = steady
+
     mirrored = _mirror_extensions(attempt, chosen, plan_used, expected_crossings,
                                   mirror_sides, verbose)
     if mirrored is not None:
@@ -1571,17 +1733,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
         if relaid:
             _relay_draw_order(strands, relaid_bands, back_map, verbose)
 
-    # Masks copy the geometry of the vertical strand they sit on.
-    by_name = {s["layer_name"]: s for s in strands}
-    for mask in level_info["new_masks"]:
-        owner = by_name.get(mask.get("first_selected_strand"))
-        if owner is not None:
-            mask["start"] = copy.deepcopy(owner["start"])
-            mask["end"] = copy.deepcopy(owner["end"])
-            mask["control_point_center"] = {
-                "x": (owner["start"]["x"] + owner["end"]["x"]) / 2.0,
-                "y": (owner["start"]["y"] + owner["end"]["y"]) / 2.0,
-            }
+    _reseat_masks(strands, level_info)
 
     if verbose:
         print(f"  H: {_result_line(h_result)}")
@@ -1590,6 +1742,8 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
     return {
         "horizontal": h_result,
         "vertical": v_result,
+        "candidates": {"h": chosen.get("h_cands") or [],
+                       "v": chosen.get("v_cands") or []},
         "search": {
             "angle_step": angle_step_degrees,
             "angle_mode": angle_mode,
