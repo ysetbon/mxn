@@ -1,0 +1,47 @@
+const $ = id => document.getElementById(id);
+const defaults = ['#db9279','#458b88','#efc56f','#596d9c','#aa77a8','#829959','#ce6676','#77a9c4','#a88360','#b4a154'];
+const API = location.hostname === '127.0.0.1' || location.hostname === 'localhost' ? '' : 'http://127.0.0.1:5174';
+let colors = [...defaults, ...defaults], rendered = null, connected = false, busy = false, zoom = 1, revision = 0, rerenderTimer;
+const settings = () => ({m:Number($('m').value),n:Number($('n').value),hand:document.querySelector('[name=hand]:checked').value,stretch:$('stretch').checked,continuation:false,k:Number($('k').value),colors:colors.slice(0,Number($('m').value)+Number($('n').value)),animals:$('animals').checked,names:$('names').checked,emojiSet:$('emoji-set').value,transparent:true,scale:1});
+const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+function status(message,error=false) {$('result-status').textContent=message;$('result-status').classList.toggle('error',error);}
+function current() {return rendered && same(rendered.request, settings());}
+function syncButtons() {$('generate').disabled=!connected||busy;$('export-json').disabled=!current()||busy;$('export-image').disabled=!current()||busy;}
+async function request(path, body) {
+  const response=await fetch(API+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(body?120000:5000)});
+  const data=await response.json();if(!response.ok)throw Error(data.error||'The renderer returned an error.');return data;
+}
+async function connect() {
+  $('connect').disabled=true;$('engine-status').textContent='Connecting to OpenStrandStudio…';
+  try {const health=await request('/api/health');if(health.renderer!=='OpenStrandStudio')throw Error('Unexpected renderer');connected=true;$('engine-status').textContent='OpenStrandStudio connected · native Qt rendering';$('connection-note').hidden=true;syncButtons();if(!rendered)await generate();}
+  catch(e){connected=false;$('engine-status').textContent='Local renderer is offline or the browser blocked access.';$('connection-note').hidden=false;status('Connect OpenStrandStudio to generate your pattern.',true);}
+  finally {$('connect').disabled=false;syncButtons();}
+}
+function palette(){const s=settings();if(!Number.isInteger(s.m+s.n)||s.m<1||s.n<1||s.m>10||s.n>10)return;$('set-count').textContent=`${s.m+s.n} sets`;$('colors').replaceChildren();for(let i=0;i<s.m+s.n;i++){const label=document.createElement('label');label.className='color-field';const input=document.createElement('input');input.type='color';input.value=colors[i];input.setAttribute('aria-label',`Set ${i+1} color`);const text=document.createElement('span');text.innerHTML=`Set ${i+1} · ${i<s.n?'H':'V'}<small>${colors[i].toUpperCase()}</small>`;input.addEventListener('input',()=>{colors[i]=input.value;text.querySelector('small').textContent=input.value.toUpperCase();changed(true);});label.append(input,text);$('colors').append(label);}}
+function changed(automatic=false){revision++;syncButtons();if(!current())status('Settings changed · Generate to update the canvas');if(automatic&&connected){clearTimeout(rerenderTimer);rerenderTimer=setTimeout(()=>generate(),250);}}
+for(const id of ['m','n','stretch'])$(id).addEventListener('input',()=>{palette();changed();});
+$('k').addEventListener('input',()=>changed(true));
+document.querySelectorAll('[name=hand]').forEach(el=>el.addEventListener('change',()=>changed(true)));
+for(const id of ['animals','names','emoji-set'])$(id).addEventListener('change',()=>{$('emoji-set').disabled=!$('animals').checked;changed(true);});
+$('random').onclick=()=>{colors=colors.map(()=>`#${Array.from({length:3},()=>Math.floor(65+Math.random()*160).toString(16).padStart(2,'0')).join('')}`);palette();changed(true);};
+$('reset-colors').onclick=()=>{colors=[...defaults,...defaults];palette();changed(true);};
+async function generate(navigate=false){
+  if(!$('settings').reportValidity()||!connected)return;
+  if(busy){clearTimeout(rerenderTimer);rerenderTimer=setTimeout(()=>generate(navigate),250);return;}
+  const submitted=settings(),thisRevision=revision;busy=true;syncButtons();$('generate').textContent='Rendering…';status('Drawing native strand layers…');
+  try{const data=await request('/api/render',submitted);const image=new Image();image.src=`data:image/png;base64,${data.png}`;image.alt=`${submitted.m} by ${submitted.n} ${submitted.hand==='lh'?'left':'right'}-hand pattern, rendered by OpenStrandStudio${submitted.animals?', with PNG animal markers':''}`;await image.decode();if(thisRevision!==revision){status('Settings changed · Waiting for the latest preview');return;}rendered={...data,request:submitted};$('preview').replaceChildren(image);zoom=1;updateZoom();$('pattern-title').textContent=`${submitted.m} × ${submitted.n} / ${submitted.hand==='lh'?'Left-hand':'Right-hand'}`;$('variant-label').textContent=submitted.continuation?'CONTINUATION':submitted.stretch?'STRETCHED':'STANDARD';status(thisRevision===revision?`${data.strands} strands · ${data.crossings} crossings · k=${submitted.k>=0?"+":""}${submitted.k} · ${submitted.hand==='lh'?'CW':'CCW'}`:'Settings changed · Generate to update the canvas');if(navigate)await window.openContinuation(data);}
+  catch(e){status(`Render failed: ${e.message}`,true);}
+  finally{busy=false;$('generate').innerHTML='Generate starting stitch <span>→</span>';syncButtons();}
+}
+$('settings').onsubmit=e=>{e.preventDefault();generate(true);};$('connect').onclick=connect;
+function updateZoom(){const image=$('preview').querySelector('img');if(image)image.style.transform=`scale(${zoom})`;$('fit').textContent=`${Math.round(zoom*100)}%`;}
+$('zoom-in').onclick=()=>{zoom=Math.min(3,zoom+.25);updateZoom();};$('zoom-out').onclick=()=>{zoom=Math.max(.25,zoom-.25);updateZoom();};$('fit').onclick=()=>{zoom=1;updateZoom();};
+function download(blob,extension,s){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`mxn-${s.m}x${s.n}-${s.hand}${s.continuation?'-continuation':s.stretch?'-stretch':''}${s.animals?'-animals':''}.${extension}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$('export-json').onclick=()=>{if(current())download(new Blob([JSON.stringify(rendered.document,null,2)],{type:'application/json'}),'json',rendered.request);};
+$('export-image').onclick=()=>$('export-dialog').showModal();$('help').onclick=()=>$('about-dialog').showModal();
+$('download').onclick=async()=>{if(!current()||busy)return;busy=true;syncButtons();$('download').disabled=true;$('download').textContent='Rendering PNG…';const s={...rendered.request,scale:Number($('scale').value),transparent:$('transparent').checked};
+  try{const data=same(s,rendered.request)?rendered:await request('/api/render',s);const bytes=Uint8Array.from(atob(data.png),x=>x.charCodeAt(0));download(new Blob([bytes],{type:'image/png'}),'png',s);$('export-dialog').close();status('Native PNG downloaded');}
+  catch(e){status(`Export failed: ${e.message}`,true);$('export-dialog').close();}
+  finally{busy=false;$('download').disabled=false;$('download').textContent='Download PNG ↓';syncButtons();}
+};
+palette();syncButtons();connect();
