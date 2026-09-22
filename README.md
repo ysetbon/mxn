@@ -62,6 +62,10 @@ Three policies are available:
 - `jev-bands` — the first Jev policy: only a band per pair, the angle third and a "stop now?" `Noul`. Kept for comparison.
 - `heuristic` — deterministic, offline: probes around the closest result so far, shortest arms first. Useful as a baseline.
 
+### Clearance rule
+
+Independently of the search mode, every `_4/_5` arm must start at least half a strand width (23 px) before its first crossing with any arm of the other group, so it visibly passes over or under that group's first–last pair instead of starting inside it. Candidates that break this are rejected before the gap check, in the exhaustive and guided searches alike, and the Jev policy is told each strand's shortfall so it knows which pair to lengthen. Because H is solved before V, `align_level_parallel` (used by the web workspace and `run_stitch.py`) re-checks the H arms against the final V arms and solves H again against them when V's outer pair moved too much. Set `MXN_ALIGNMENT_CLEARANCE` to a pixel value to change the rule, or to `0` for the previous behaviour; the multi-level `mxn_continuation_next` pipeline keeps its own crossing checks and runs with the rule off.
+
 Enable with `MXN_ALIGNMENT_GUIDED=jev` (or `jev-bands`, `heuristic`) for the desktop app, web workspace and CLIs, or pass `guided_search=` to `align_horizontal_strands_parallel` / `align_vertical_strands_parallel`. Tuning: `MXN_ALIGNMENT_GUIDED_BUDGET` (fraction of combos, default 0.35), `MXN_ALIGNMENT_GUIDED_BANDS` (default 4), `MXN_ALIGNMENT_GUIDED_ROUNDS` (default 40), `MXN_ALIGNMENT_GUIDED_PATIENCE` (rounds without improvement before stopping, default 3), `MXN_ALIGNMENT_GUIDED_STOP` (stop probability threshold, default 0.6). Alignment results carry a `search` entry describing which mode ran, how many combos it evaluated and, for Jev, how many calls and input tokens it used.
 
 ## Tests

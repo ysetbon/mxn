@@ -32,6 +32,7 @@ __all__ = [
     # Parallel alignment functions
     "align_horizontal_strands_parallel",
     "align_vertical_strands_parallel",
+    "align_level_parallel",
     "apply_parallel_alignment",
     "print_alignment_debug",
     "get_parallel_alignment_preview",
@@ -165,6 +166,17 @@ def align_vertical_strands_parallel(all_strands, n, m, **kwargs):
     # Calls LH's align_vertical_strands_parallel with RH ordering swapped in
     return _run_with_rh_ordering(
         _lh_alignment.align_vertical_strands_parallel,
+        all_strands,
+        n,
+        m,
+        **kwargs,
+    )
+
+
+def align_level_parallel(all_strands, n, m, **kwargs):
+    """RH both-group alignment with the H-vs-final-V clearance re-check, using RH ordering."""
+    return _run_with_rh_ordering(
+        _lh_alignment.align_level_parallel,
         all_strands,
         n,
         m,

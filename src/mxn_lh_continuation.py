@@ -57,6 +57,7 @@ __all__ = [
     # Parallel alignment functions
     "align_horizontal_strands_parallel",
     "align_vertical_strands_parallel",
+    "align_level_parallel",
     "apply_parallel_alignment",
     "print_alignment_debug",
     "get_alignment_combo_guard",
@@ -2263,10 +2264,36 @@ def _cupy_2strand_chunk(C, A, E, S, P, R,
     return best_fallback_info
 
 
-def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width, allow_inner_extensions=True):
+def _start_clearances(p, q, r, s):
+    """
+    For each arm p->q, the distance from its start to its first crossing with
+    any arm r->s of the other group (inf when it crosses none). Negative means
+    the crossing lies behind the start: the arm begins inside the other group.
+    """
+    import numpy as np
+
+    d = q - p
+    e = s - r
+    denom = d[:, None, 0] * e[None, :, 1] - d[:, None, 1] * e[None, :, 0]
+    w = r[None, :, :] - p[:, None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (w[..., 0] * e[None, :, 1] - w[..., 1] * e[None, :, 0]) / denom
+        u = (w[..., 0] * d[:, None, 1] - w[..., 1] * d[:, None, 0]) / denom
+    crosses = (np.abs(denom) > 1e-9) & (u >= 0) & (u <= 1)
+    lengths = np.hypot(d[:, 0], d[:, 1])
+    return np.where(crosses, t * lengths[:, None], np.inf).min(axis=1)
+
+
+def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width, allow_inner_extensions=True,
+                          other_arms=None, min_clearance=0.0):
     """
     Numpy-accelerated batch angle search. Tests ALL angles at once for a given
     set of strand start positions.
+
+    `other_arms` are the other group's _4/_5 arms as ((x, y), (x, y)) segments;
+    with `min_clearance` > 0 a configuration is only valid when every arm starts
+    at least that far before its first crossing with them, so the arm visibly
+    passes over or under the other group's outermost pair.
 
     For each angle, finds per-strand extensions and checks gap validity.
     Returns the best valid angle result, or None.
@@ -2282,6 +2309,11 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
     min_gap = strand_width + 10
     max_gap = strand_width * 1.5
     ideal_gap = (min_gap + max_gap) / 2.0
+    clearance_active = bool(other_arms) and min_clearance > 0
+    if clearance_active:
+        other_r = np.array([[a[0][0], a[0][1]] for a in other_arms], dtype=np.float64)
+        other_s = np.array([[a[1][0], a[1][1]] for a in other_arms], dtype=np.float64)
+    clearances = None
 
     # Pre-extract strand data into numpy arrays
     starts = np.array([[s["original_start"]["x"], s["original_start"]["y"]] for s in strands_list])
@@ -2460,6 +2492,15 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
             gap_variance = 0.0  # Single gap, no variance
             first_last_dist = float(best_gap)  # For 2 strands, first-last distance IS the gap
 
+            if clearance_active:
+                p = np.array([[ext1_start_x[best_ext1_idx], ext1_start_y[best_ext1_idx]],
+                              [all_px[best_ext2_idx], all_py[best_ext2_idx]]])
+                lengths = np.array([ext1_proj[best_ext1_idx], all_proj[best_ext2_idx]])
+                q = p + lengths[:, None] * np.stack([cfg_cos, cfg_sin], axis=1)
+                clearances = _start_clearances(p, q, other_r, other_s)
+                if np.min(clearances) < min_clearance:
+                    continue
+
             if (first_last_dist, gap_variance) < (best_first_last_dist, best_gap_variance):
                 best_first_last_dist = first_last_dist
                 best_gap_variance = gap_variance
@@ -2490,6 +2531,7 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
                         "min_gap": min_gap,
                         "max_gap": max_gap,
                         "first_last_distance": abs(sg),
+                        "start_clearances": None if clearances is None else clearances.tolist(),
                     }
 
         else:
@@ -2527,6 +2569,12 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
             all_in_range = np.all((abs_gaps >= min_gap) & (abs_gaps <= max_gap))
 
             if all_in_range:
+                if clearance_active:
+                    p = np.stack([cfg_ext_start_x, cfg_ext_start_y], axis=1)
+                    q = np.stack([cfg_end_x, cfg_end_y], axis=1)
+                    clearances = _start_clearances(p, q, other_r, other_s)
+                    if np.min(clearances) < min_clearance:
+                        continue
                 avg_gap = float(np.mean(abs_gaps))
                 gap_var = float(np.var(abs_gaps))
                 first_last_dist = abs(float(last_sg))
@@ -2572,6 +2620,7 @@ def _numpy_try_all_angles(strands_list, angles_deg, max_extension, strand_width,
                             "min_gap": min_gap,
                             "max_gap": max_gap,
                             "first_last_distance": first_last_dist,
+                            "start_clearances": None if clearances is None else clearances.tolist(),
                         }
 
     return best_result
@@ -2906,6 +2955,8 @@ def _evaluate_combo_indices(task, combo_indices, angle_fraction=None):
         custom_angle_max,
         angle_mode,
         num_opposite_pairs,
+        other_arms,
+        min_clearance,
     ) = task
 
     working_strands = _clone_alignment_strands(strands_list)
@@ -2962,6 +3013,8 @@ def _evaluate_combo_indices(task, combo_indices, angle_fraction=None):
             max_extension,
             strand_width,
             allow_inner_extensions=False,
+            other_arms=other_arms,
+            min_clearance=min_clearance,
         )
 
         if np_result and np_result.get("valid"):
@@ -3125,6 +3178,8 @@ def _search_combo_space_cpu(
     on_config_callback=None,
     direction_type="horizontal",
     num_opposite_pairs=1,
+    other_arms=None,
+    min_clearance=0.0,
 ):
     """
     Search the CPU combo space while preserving the existing validity rules and
@@ -3252,6 +3307,8 @@ def _search_combo_space_cpu(
                 custom_angle_max,
                 angle_mode,
                 num_opposite_pairs,
+                other_arms,
+                min_clearance,
             )
 
     if run_parallel:
@@ -3306,6 +3363,105 @@ def _search_combo_space_cpu(
     )
 
 
+def _resolve_min_clearance(strand_width, override=None):
+    """
+    Minimum distance from an arm's start to its first crossing with the other
+    group's arms. An explicit `override` wins; otherwise MXN_ALIGNMENT_CLEARANCE:
+    unset -> half a strand width; a number -> that many px; 0/off -> disabled
+    (the pre-clearance behaviour).
+    """
+    if override is not None:
+        return max(0.0, float(override))
+    raw = os.environ.get("MXN_ALIGNMENT_CLEARANCE", "").strip().lower()
+    if raw in ("", "auto"):
+        return strand_width / 2.0
+    if raw in ("0", "off", "false", "none"):
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return strand_width / 2.0
+
+
+def _other_group_arms(all_strands, names):
+    """The other group's current _4/_5 arms as ((x, y), (x, y)) segments."""
+    if not names:
+        return []
+    wanted = set(names)
+    return [
+        ((s["start"]["x"], s["start"]["y"]), (s["end"]["x"], s["end"]["y"]))
+        for s in all_strands
+        if s["type"] == "AttachedStrand" and s["layer_name"] in wanted
+    ]
+
+
+def _group_start_clearance(all_strands, names, other_names):
+    """Smallest start clearance of the arms in `names` against the arms in `other_names`."""
+    import numpy as np
+
+    arms = _other_group_arms(all_strands, names)
+    others = _other_group_arms(all_strands, other_names)
+    if not arms or not others:
+        return None
+    p = np.array([a[0] for a in arms], dtype=np.float64)
+    q = np.array([a[1] for a in arms], dtype=np.float64)
+    r = np.array([a[0] for a in others], dtype=np.float64)
+    s = np.array([a[1] for a in others], dtype=np.float64)
+    return float(np.min(_start_clearances(p, q, r, s)))
+
+
+def align_level_parallel(all_strands, n, m, k=0, direction="cw", h_options=None, v_options=None,
+                         max_passes=3, verbose=True):
+    """
+    Align both groups of one level: H first, V against the aligned H, then a
+    check that the H arms still clear the V arms where they ended up. H is
+    solved against V's pre-alignment arms, so when V's outer pair moves enough
+    to break the clearance rule, H is solved again against the final V arms and
+    V once more, up to `max_passes` times.
+
+    Returns (strands, h_result, v_result, info).
+    """
+    h_options = dict(h_options or {})
+    v_options = dict(v_options or {})
+    rule = _resolve_min_clearance(h_options.get("strand_width", 46), h_options.get("min_clearance"))
+    if k != 0:
+        _, h_order, _, v_order = _build_k_based_strand_sets(m, n, k, direction)
+    else:
+        h_order = v_order = None
+
+    base = copy.deepcopy(all_strands)
+    final_v_arms = None
+    history = []
+    passes = 0
+    while True:
+        passes += 1
+        strands = copy.deepcopy(base)
+        h_res = align_horizontal_strands_parallel(strands, n, m=m, k=k, direction=direction,
+                                                  other_arms=final_v_arms, **h_options)
+        if h_res.get("success") or h_res.get("is_fallback"):
+            strands = apply_parallel_alignment(strands, h_res)
+        v_res = align_vertical_strands_parallel(strands, n, m, k=k, direction=direction, **v_options)
+        if v_res.get("success") or v_res.get("is_fallback"):
+            strands = apply_parallel_alignment(strands, v_res)
+
+        clearance = _group_start_clearance(strands, h_order, v_order) if rule and h_order else None
+        history.append({"pass": passes, "h_clearance_px": None if clearance is None else round(clearance, 1)})
+        if clearance is None or clearance >= rule or not h_res.get("success") or passes >= max_passes:
+            break
+        if verbose:
+            print(f"        H arms start only {clearance:.1f}px before the final V arms "
+                  f"(rule {rule:.0f}px); solving H again against them (pass {passes + 1})")
+        final_v_arms = _other_group_arms(strands, v_order)
+
+    info = {
+        "passes": passes,
+        "clearance_rule_px": rule,
+        "h_clearance_px": history[-1]["h_clearance_px"],
+        "history": history,
+    }
+    return strands, h_res, v_res, info
+
+
 def _resolve_guided_search(spec, total_combos):
     """
     Turn the `guided_search` argument (or MXN_ALIGNMENT_GUIDED) into a policy,
@@ -3353,19 +3509,22 @@ def _guided_search_info(summary):
 def _run_guided_combo_search(policy, strands_list, pairs, pair_directions, pair_originals,
                              ext_range_values, angle_step_degrees, max_extension, strand_width,
                              custom_angle_min, custom_angle_max, angle_mode, num_opposite_pairs,
-                             direction_type, problem, on_config_callback=None):
+                             direction_type, problem, on_config_callback=None,
+                             other_arms=None, min_clearance=0.0):
     """Run the policy-guided cell search on this group with the exact chunk evaluator."""
     from mxn_guided_search import build_geometry, guided_combo_search, options_from_env
 
     pair_indices = _encode_pair_indices(strands_list, pairs)
     label = f"{direction_type[0].upper()} guided[{policy.name}]"
-    geometry = build_geometry(strands_list, pairs, strand_width + 10, strand_width * 1.5)
+    geometry = build_geometry(strands_list, pairs, strand_width + 10, strand_width * 1.5,
+                              other_arms=other_arms, min_clearance=min_clearance)
 
     def evaluate_cell(combo_indices, angle_fraction):
         task = (
             strands_list, pair_indices, pair_directions, pair_originals, ext_range_values,
             0, 0, angle_step_degrees, max_extension, strand_width,
             custom_angle_min, custom_angle_max, angle_mode, num_opposite_pairs,
+            other_arms, min_clearance,
         )
         return _evaluate_combo_indices(task, combo_indices, angle_fraction)
 
@@ -3394,7 +3553,9 @@ def align_horizontal_strands_parallel(all_strands, n,
                                        use_gpu=False,
                                        angle_mode="first_strand",
                                        prefer_short_arms=True,
-                                       guided_search=None):
+                                       guided_search=None,
+                                       min_clearance=None,
+                                       other_arms=None):
     """
     Parallel alignment of horizontal _4/_5 strands using first-last pair approach.
 
@@ -3615,6 +3776,11 @@ def align_horizontal_strands_parallel(all_strands, n,
         }
 
     # === Guided (policy-driven) search first, then the exhaustive GPU or CPU search ===
+    if other_arms is None:
+        other_arms = _other_group_arms(all_strands, v_order_list)
+    min_clearance = _resolve_min_clearance(strand_width, min_clearance) if other_arms else 0.0
+    if min_clearance:
+        print(f"        H clearance rule: arms must start >= {min_clearance:.0f}px before crossing the V arms")
     guided_policy = _resolve_guided_search(guided_search, total_combos)
     guided_summary = None
     if guided_policy is not None:
@@ -3638,6 +3804,8 @@ def align_horizontal_strands_parallel(all_strands, n,
                             max_pair_extension, pair_extension_step,
                             base_angle_min, base_angle_max, angle_step_degrees),
             on_config_callback=on_config_callback,
+            other_arms=other_arms,
+            min_clearance=min_clearance,
         )
     search_info = _guided_search_info(guided_summary)
 
@@ -3694,6 +3862,8 @@ def align_horizontal_strands_parallel(all_strands, n,
             on_config_callback=on_config_callback,
             direction_type="horizontal",
             num_opposite_pairs=v_num_opposite_pairs,
+            other_arms=other_arms,
+            min_clearance=min_clearance,
         )
 
     best_result = _select_best_result(all_valid_results,
@@ -3715,12 +3885,14 @@ def align_horizontal_strands_parallel(all_strands, n,
             "average_gap": best_result["average_gap"],
             "gap_variance": best_result["gap_variance"],
             "first_last_distance": best_result.get("first_last_distance"),
+            "start_clearances": best_result.get("start_clearances"),
             "pair_extension": best_pair_extensions[0] if best_pair_extensions else 0,
             "pair_extensions": best_pair_extensions,
             "min_gap": best_result.get("min_gap", strand_width),
             "max_gap": best_result.get("max_gap", strand_width * 1.5),
             "message": f"Found parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})",
             "search": search_info,
+            "clearance_rule_px": min_clearance,
         }
     elif best_fallback:
         # Return best fallback candidate (max-min: the one with maximum worst gap)
@@ -3747,6 +3919,7 @@ def align_horizontal_strands_parallel(all_strands, n,
             "max_gap": best_fallback.get("max_gap", strand_width * 1.5),
             "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)",
             "search": search_info,
+            "clearance_rule_px": min_clearance,
         }
     else:
         print(f"\n=== No Solution Found ===")
@@ -3768,7 +3941,9 @@ def align_vertical_strands_parallel(all_strands, n, m,
                                      use_gpu=False,
                                      angle_mode="first_strand",
                                      prefer_short_arms=True,
-                                     guided_search=None):
+                                     guided_search=None,
+                                     min_clearance=None,
+                                     other_arms=None):
     """
     Parallel alignment of vertical _4/_5 strands using first-last pair approach.
 
@@ -3997,6 +4172,11 @@ def align_vertical_strands_parallel(all_strands, n, m,
         }
 
     # === Guided (policy-driven) search first, then the exhaustive GPU or CPU search ===
+    if other_arms is None:
+        other_arms = _other_group_arms(all_strands, h_order_list_opp if v_order_list is not None else None)
+    min_clearance = _resolve_min_clearance(strand_width, min_clearance) if other_arms else 0.0
+    if min_clearance:
+        print(f"        V clearance rule: arms must start >= {min_clearance:.0f}px before crossing the H arms")
     guided_policy = _resolve_guided_search(guided_search, total_combos)
     guided_summary = None
     if guided_policy is not None:
@@ -4020,6 +4200,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
                             max_pair_extension, pair_extension_step,
                             base_angle_min, base_angle_max, angle_step_degrees),
             on_config_callback=on_config_callback,
+            other_arms=other_arms,
+            min_clearance=min_clearance,
         )
     search_info = _guided_search_info(guided_summary)
 
@@ -4076,6 +4258,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
             on_config_callback=on_config_callback,
             direction_type="vertical",
             num_opposite_pairs=h_num_opposite_pairs,
+            other_arms=other_arms,
+            min_clearance=min_clearance,
         )
 
     best_result = _select_best_result(all_valid_results,
@@ -4097,12 +4281,14 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "average_gap": best_result["average_gap"],
             "gap_variance": best_result["gap_variance"],
             "first_last_distance": best_result.get("first_last_distance"),
+            "start_clearances": best_result.get("start_clearances"),
             "pair_extension": best_pair_extensions[0] if best_pair_extensions else 0,
             "pair_extensions": best_pair_extensions,
             "min_gap": best_result.get("min_gap", strand_width),
             "max_gap": best_result.get("max_gap", strand_width * 1.5),
             "message": f"Found vertical parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})",
             "search": search_info,
+            "clearance_rule_px": min_clearance,
         }
     elif best_fallback:
         # Return best fallback candidate (max-min: the one with maximum worst gap)
@@ -4129,6 +4315,7 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "max_gap": best_fallback.get("max_gap", strand_width * 1.5),
             "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)",
             "search": search_info,
+            "clearance_rule_px": min_clearance,
         }
     else:
         print(f"\n=== No Solution Found ===")

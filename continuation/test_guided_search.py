@@ -280,6 +280,48 @@ class GuidedLoopTests(unittest.TestCase):
             G.make_policy("magic")
 
 
+class ClearanceRuleTests(unittest.TestCase):
+    def test_start_clearance_measures_distance_to_the_first_crossing(self):
+        import numpy as np
+        p = np.array([[0.0, 0.0], [0.0, 50.0], [0.0, 150.0]])
+        q = np.array([[100.0, 0.0], [100.0, 50.0], [100.0, 150.0]])
+        r = np.array([[30.0, -100.0], [-20.0, 40.0], [10.0, 200.0]])
+        s = np.array([[30.0, 100.0], [-20.0, 60.0], [90.0, 200.0]])
+        clearances = LH._start_clearances(p, q, r, s)
+        self.assertAlmostEqual(clearances[0], 30.0)      # crosses the vertical arm 30px in
+        self.assertAlmostEqual(clearances[1], -20.0)     # the crossing lies behind the start
+        self.assertEqual(clearances[2], float("inf"))    # parallel: no crossing
+        self.assertEqual(G.start_clearance((0, 50), (100, 50), [((-20, 40), (-20, 60))]), -20.0)
+        self.assertIsNone(G.start_clearance((0, 150), (100, 150), [((10, 200), (90, 200))]))
+
+    def test_rule_off_reproduces_the_old_short_arm_result(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            strands = _get_active_strands(json.loads(LH.generate_json(1, 2, k=2, direction="cw")))
+            with mock.patch.dict(os.environ, {"MXN_ALIGNMENT_GUIDED": "", "MXN_ALIGNMENT_CLEARANCE": "0"}):
+                _, h_off, v_off, info_off = LH.align_level_parallel(strands, 2, 1, k=2, direction="cw")
+            with mock.patch.dict(os.environ, {"MXN_ALIGNMENT_GUIDED": "", "MXN_ALIGNMENT_CLEARANCE": ""}):
+                aligned, h_on, v_on, info_on = LH.align_level_parallel(strands, 2, 1, k=2, direction="cw")
+        self.assertEqual(tuple(v_off["pair_extensions"]), (0,))
+        self.assertEqual(info_off["clearance_rule_px"], 0.0)
+        self.assertEqual(info_on["clearance_rule_px"], 23.0)
+        self.assertGreater(v_on["pair_extensions"][0], 0)
+        _, h_order, _, v_order = LH._build_k_based_strand_sets(1, 2, 2, "cw")
+        self.assertGreaterEqual(LH._group_start_clearance(aligned, v_order, h_order), 23.0)
+        self.assertGreaterEqual(LH._group_start_clearance(aligned, h_order, v_order), 23.0)
+
+    def test_second_pass_resolves_h_against_the_final_v_arms(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            strands = _get_active_strands(json.loads(LH.generate_json(3, 2, k=2, direction="cw")))
+            with mock.patch.dict(os.environ, {"MXN_ALIGNMENT_GUIDED": "", "MXN_ALIGNMENT_CLEARANCE": ""}):
+                aligned, h_res, v_res, info = LH.align_level_parallel(strands, 2, 3, k=2, direction="cw")
+        self.assertTrue(h_res["success"] and v_res["success"])
+        _, h_order, _, v_order = LH._build_k_based_strand_sets(3, 2, 2, "cw")
+        self.assertGreaterEqual(LH._group_start_clearance(aligned, h_order, v_order), 23.0)
+        self.assertGreaterEqual(LH._group_start_clearance(aligned, v_order, h_order), 23.0)
+        self.assertEqual(info["h_clearance_px"], round(LH._group_start_clearance(aligned, h_order, v_order), 1))
+        self.assertGreaterEqual(info["passes"], 1)
+
+
 class EngineIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

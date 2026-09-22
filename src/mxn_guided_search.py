@@ -170,8 +170,29 @@ def _unit(dx, dy):
     return (dx / length, dy / length) if length > 1e-9 else (0.0, 0.0)
 
 
-def build_geometry(strands_list, pairs, min_gap, max_gap):
-    """Describe the group's strands, opposite pairs and gap rule for a policy."""
+def start_clearance(start, end, arms):
+    """Distance from `start` along start->end to the first crossing with any of `arms`; None if none."""
+    px, py = start
+    dx, dy = end[0] - px, end[1] - py
+    length = math.hypot(dx, dy)
+    best = None
+    for (rx, ry), (sx, sy) in arms:
+        ex, ey = sx - rx, sy - ry
+        denom = dx * ey - dy * ex
+        if abs(denom) < 1e-9:
+            continue
+        wx, wy = rx - px, ry - py
+        t = (wx * ey - wy * ex) / denom
+        u = (wx * dy - wy * dx) / denom
+        if 0 <= u <= 1:
+            clearance = t * length
+            if best is None or clearance < best:
+                best = clearance
+    return best
+
+
+def build_geometry(strands_list, pairs, min_gap, max_gap, other_arms=None, min_clearance=0.0):
+    """Describe the group's strands, opposite pairs, gap rule and clearance rule for a policy."""
     index_of = {id(strand): i for i, strand in enumerate(strands_list)}
     pair_of = {}
     for p, (left, right) in enumerate(pairs):
@@ -183,7 +204,7 @@ def build_geometry(strands_list, pairs, min_gap, max_gap):
         s23 = strand["strand_2_3"]
         ux, uy = _unit(s23["end"]["x"] - s23["start"]["x"], s23["end"]["y"] - s23["start"]["y"])
         start, target = strand["original_start"], strand["target_position"]
-        strands.append({
+        entry = {
             "name": strand["strand_4_5"]["layer_name"],
             "order": i,
             "pair": pair_of.get(i),
@@ -191,7 +212,12 @@ def build_geometry(strands_list, pairs, min_gap, max_gap):
             "target_px": [round(target["x"], 1), round(target["y"], 1)],
             "extension_direction": [round(ux, 3), round(uy, 3)],
             "reach_px": round(math.hypot(target["x"] - start["x"], target["y"] - start["y"]), 1),
-        })
+        }
+        if other_arms and min_clearance > 0:
+            clearance = start_clearance((start["x"], start["y"]), (target["x"], target["y"]), other_arms)
+            entry["start_clearance_px"] = None if clearance is None else round(clearance, 1)
+            entry["clearance_shortfall_px"] = None if clearance is None else round(max(0.0, min_clearance - clearance), 1)
+        strands.append(entry)
     count = len(strands_list)
     pair_desc = []
     for p, (left, right) in enumerate(pairs):
@@ -209,7 +235,7 @@ def build_geometry(strands_list, pairs, min_gap, max_gap):
             "position": position,
             "gaps_touched": gaps,
         })
-    return {
+    geometry = {
         "strand_order": [s["name"] for s in strands],
         "strands": strands,
         "pairs": pair_desc,
@@ -224,6 +250,19 @@ def build_geometry(strands_list, pairs, min_gap, max_gap):
             ),
         },
     }
+    if other_arms and min_clearance > 0:
+        geometry["clearance_rule"] = {
+            "min_px": min_clearance,
+            "other_group_arms": len(other_arms),
+            "note": (
+                "Every arm must start at least min_px before its first crossing with the other group's "
+                "arms, so it visibly passes over or under their outermost pair. Candidates that violate "
+                "this are rejected before the gap check. strands[*].start_clearance_px is the clearance at "
+                "zero extension and clearance_shortfall_px how much further that strand's pair must be "
+                "extended (extension moves the start away from the crossing, roughly one px per px)."
+            ),
+        }
+    return geometry
 
 
 def describe_gaps(gaps, order, min_gap, max_gap):
@@ -390,7 +429,10 @@ class _JevClientMixin:
                     ),
                     "goal": (
                         "Find a valid parallel alignment with as few evaluated combos as possible. Valid means "
-                        "every gap is inside geometry.gap_rule and all gaps lie on the same side. Bands whose "
+                        "every gap is inside geometry.gap_rule, all gaps lie on the same side, and (when "
+                        "geometry.clearance_rule is present) every arm starts at least clearance_rule.min_px "
+                        "before crossing the other group; a pair whose strands show clearance_shortfall_px "
+                        "needs at least that much extension. Bands whose "
                         "explored_cells produced valid results, or the largest closest_worst_gap_px, are the "
                         "most promising; a band with 0 remaining cells is exhausted. Prefer the shorter "
                         "extension when bands look equally promising."
@@ -528,7 +570,9 @@ class JevPolicy(_JevClientMixin):
                     "context": (
                         "Extending a pair slides its strands' start points along their extension_direction "
                         "(see geometry.strands), which mostly changes the gaps in gaps_touched. A too_tight "
-                        "gap needs the two strands further apart; a too_wide gap needs them closer."
+                        "gap needs the two strands further apart; a too_wide gap needs them closer. When "
+                        "geometry.clearance_rule is present, a strand with clearance_shortfall_px > 0 forces "
+                        "its pair longer by at least that much before any configuration can be valid."
                     ),
                 },
                 "criteria": {
@@ -599,6 +643,8 @@ def _describe_valid(result, labels, angle_label, order, min_gap, max_gap):
         "gap_variance": round(float(result.get("gap_variance", math.inf)), 4),
         "total_extension_px": float(sum(result.get("pair_extensions", ()))),
         "gaps": describe_gaps(result.get("gaps"), order, min_gap, max_gap),
+        "min_start_clearance_px": (round(min(result["start_clearances"]), 1)
+                                   if result.get("start_clearances") else None),
     }
 
 

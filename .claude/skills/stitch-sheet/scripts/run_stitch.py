@@ -124,22 +124,14 @@ def main():
         v_combos = (a.ext_max // v_step + 1) ** v_pairs
 
     t0 = time.time()
-    h_res = mod.align_horizontal_strands_parallel(
-        strands, n, angle_step_degrees=a.angle_step, max_extension=100.0,
-        max_pair_extension=a.ext_max, pair_extension_step=h_step,
-        m=m, k=k, direction=direction, use_gpu=False, angle_mode=a.angle_mode)
+    common = dict(angle_step_degrees=a.angle_step, max_extension=100.0,
+                  max_pair_extension=a.ext_max, use_gpu=False, angle_mode=a.angle_mode)
+    strands, h_res, v_res, level = mod.align_level_parallel(
+        strands, n, m, k=k, direction=direction,
+        h_options=dict(common, pair_extension_step=h_step),
+        v_options=dict(common, pair_extension_step=v_step))
     t_h = time.time() - t0
-    if h_res.get('success') or h_res.get('is_fallback'):
-        strands = mod.apply_parallel_alignment(strands, h_res)
-
-    t0 = time.time()
-    v_res = mod.align_vertical_strands_parallel(
-        strands, n, m, angle_step_degrees=a.angle_step, max_extension=100.0,
-        max_pair_extension=a.ext_max, pair_extension_step=v_step,
-        k=k, direction=direction, use_gpu=False, angle_mode=a.angle_mode)
-    t_v = time.time() - t0
-    if v_res.get('success') or v_res.get('is_fallback'):
-        strands = mod.apply_parallel_alignment(strands, v_res)
+    t_v = 0.0
 
     _set_active_strands(data, strands)
     open(os.path.join(a.out, tag + '_final.json'), 'w').write(json.dumps(data, indent=1))
@@ -185,7 +177,9 @@ def main():
         search=dict(ext_max=a.ext_max, h_step=h_step, v_step=v_step,
                     h_pairs=h_pairs, v_pairs=v_pairs,
                     h_combos=h_combos, v_combos=v_combos,
-                    angle_step=a.angle_step, angle_mode=a.angle_mode),
+                    angle_step=a.angle_step, angle_mode=a.angle_mode,
+                    passes=level['passes'], clearance_rule_px=level['clearance_rule_px'],
+                    h_clearance_px=level['h_clearance_px']),
         timing=dict(generate_s=round(t_gen, 2), h_align_s=round(t_h, 2),
                     v_align_s=round(t_v, 2)))
     open(os.path.join(a.out, tag + '.json'), 'w').write(json.dumps(summary, indent=1))

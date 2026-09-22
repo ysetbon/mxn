@@ -1536,6 +1536,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 use_gpu=use_gpu,
                 angle_mode=angle_mode,
                 prefer_short_arms=use_short,
+                min_clearance=0,
             )
 
         def align_v(ceiling, step, window, grab=None):
@@ -1553,6 +1554,7 @@ def align_continuation_level(strands, m, n, k, direction, hand, level, level_inf
                 use_gpu=use_gpu,
                 angle_mode=angle_mode,
                 prefer_short_arms=use_short,
+                min_clearance=0,
             )
 
         if plan is None:
