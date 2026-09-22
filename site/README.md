@@ -1,6 +1,6 @@
 # MxN native web workspace
 
-The redesigned controls now use **OpenStrandStudio's actual Qt renderer**. There is no JavaScript/SVG strand renderer and no Pyodide generation path. `native_renderer.py` calls the existing MxN `RenderMixin._ensure_canvas_prepared` and `_generate_image_in_memory`: the original loader creates `Strand`, `AttachedStrand`, and `MaskedStrand` objects and draws them in the original canvas order.
+The redesigned controls use **OpenStrandStudio's actual Qt renderer** when the local renderer is running. Without it, the Starting stitch page falls back to the browser (see *Browser rendering* below). `native_renderer.py` calls the existing MxN `RenderMixin._ensure_canvas_prepared` and `_generate_image_in_memory`: the original loader creates `Strand`, `AttachedStrand`, and `MaskedStrand` objects and draws them in the original canvas order.
 
 ## Run
 
@@ -9,6 +9,17 @@ From the MxN repository: `python site/serve_native.py`, then open http://127.0.0
 Alternatively, double-click `start-native.cmd` in this directory. The renderer must remain running. Python with PyQt5 and the MxN and OpenStrandStudio checkouts are required. OpenStrandStudio is located in the sibling `OpenStrandStudio` directory by default; set `OPENSTRANDSTUDIO_DIR` to override it. Existing repository sources and assets are used directly and are not modified.
 
 The privately hosted Site connects to this same loopback renderer. A browser may ask permission to access the local network or block that connection. The local URL serves the identical UI and avoids cross-origin access. Rendering from another computer requires the native renderer and source checkouts on that computer; the hosted page does not run Qt in Cloudflare.
+
+## Browser rendering
+
+When `/api/health` does not answer, `app.js` switches to the browser engine:
+
+- `dist/generators.js` ports `mxn_lh.py`, `mxn_rh.py`, `mxn_lh_strech.py` and `mxn_rh_stretch.py`. `test_browser_generators.py` checks that it produces the same document as Python for every m, n in 1–10, both hands, standard and stretch (colors aside, which the site repaints from the palette).
+- `dist/vendor/strand-renderer.js` is a verbatim copy of OpenStrandJS's standalone renderer, pinned to the commit in its header, with Paper.js 0.12.18 in `dist/vendor/paper-full.min.js`. Update it by copying a newer revision and changing that commit.
+- Preview and PNG export (1×/2×/4×, transparent or white) use the same bounds as `RenderMixin._calculate_strands_bounds`, with shadows off as in the desktop preview. JSON export is the generated history document.
+- Animal markers, strand labels and Continuation are disabled in this mode and need the local renderer. **Reconnect renderer** switches to it once it is running.
+
+The hosted Site has to be republished from `dist/` to pick up these files.
 
 ## Animal markers
 

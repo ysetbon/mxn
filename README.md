@@ -6,7 +6,7 @@ Create M × N strand patterns, generate continuations from a k offset, and align
 
 **[Launch MxN Strand Studio](https://mxn-strand-studio.topspin-tech-0568.chatgpt.site)**
 
-The hosted site is currently private and requires authorized access. It connects to a Python renderer running on your computer; it is not a standalone cloud renderer. Keep the local renderer running while using the site.
+The hosted site is currently private and requires authorized access. The Starting stitch page works on its own: without a local renderer, the pattern is generated in the browser and drawn by [OpenStrandJS](https://github.com/ysetbon/OpenStrandJS), the browser port of the OpenStrandStudio renderer. Animal markers, strand labels and the Continuation page need the Python renderer running on your computer (below); when it is running, the site uses it for everything.
 
 ## Run locally
 
@@ -45,8 +45,8 @@ Use **Back to Starting stitch** to return to the original setup and canvas. The 
 
 ## Rendering and limitations
 
-- Patterns use the actual OpenStrandStudio strand classes, masks, layer order, and Qt rendering pipeline.
-- The hosted site provides the interface; Python generation and rendering run locally.
+- With the local renderer, patterns use the actual OpenStrandStudio strand classes, masks, layer order, and Qt rendering pipeline.
+- Without it, `site/dist/generators.js` (a port of the four starting-stitch generators, checked against the Python output by `site/test_browser_generators.py`) builds the same JSON and a vendored copy of OpenStrandJS's `strand-renderer.js` draws it. Animal markers, strand labels and Continuation still run in Python.
 - GPU batch workflows and exporting every alignment attempt remain in the desktop application.
 - Workflow snapshots are temporary. Reloading the browser or restarting the renderer requires generating the pattern again.
 
@@ -76,6 +76,7 @@ From the repository root:
 
 ```bash
 python -m unittest discover -s site -p test_native_renderer.py
+python -m unittest discover -s site -p test_browser_generators.py   # needs node
 ```
 
 The Qt-free SVG renderer used by the documentation and the stitch-sheet skill (`src/oss_svg.py`) is pixel-checked against OpenStrandStudio's own drawing with:
