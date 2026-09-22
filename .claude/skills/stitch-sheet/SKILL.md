@@ -101,11 +101,14 @@ asked to update an existing sheet, pass its `url`.
 
 ## 6. Non-negotiable correctness checks
 
-- **Mask paint order.** Base masks must be drawn UNDER the `_4/_5` strands. The
-  renderer classifies a mask by its member strands (`first_selected_strand` /
-  `second_selected_strand`), never by splitting its name — once set numbers reach
-  4 or 5, names like `5_3_4_2` are base masks that a string test gets wrong.
-  Paint order is: base strands → base masks → `_4/_5` → `_4/_5` masks.
+- **Drawing matches OpenStrandStudio.** `render_strands.py` draws through the
+  repo's `src/oss_svg.py`, a line-for-line port of OpenStrandStudio's strand,
+  attached-strand and mask drawing: end circles recomputed from the real
+  attachments (as OSS does on load), side lines on free ends, mask = stroke and
+  fill intersections (the fill clip 4 px wider), and the layer order of the
+  JSON `index` slots, which keeps the base masks under `_4/_5`. Never hand-roll
+  strand or mask SVG in the sheet; `continuation/test_oss_svg.py` pixel-checks
+  the port against OSS itself.
 - **Colours.** The generator randomises colours past set 2, so the renderer
   re-colours deterministically: horizontal sets by index, vertical sets (detected
   from geometry) in indigo shades. Never present a randomised colour as meaningful.
@@ -119,6 +122,6 @@ asked to update an existing sheet, pass its `url`.
 
 - `scripts/run_stitch.py` — one stitch: generate → align → summary JSON
 - `scripts/build_sheet.py` — results directory → artifact HTML
-- `scripts/render_strands.py` — JSON → SVG (paint order, palette, labels)
+- `scripts/render_strands.py` — JSON → SVG (palette, labels; drawing via `src/oss_svg.py`)
 - `assets/template.html` — page shell: CSS, layout, chart hover script
 - `reference/geometry.md` — constants, the m = 1 closed form, cost table

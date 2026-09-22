@@ -18,6 +18,9 @@ where the algorithm currently gives out.
 - **[docs/](docs/README.md)** — rendered sequences: per-level SVG frames (they
   display right on GitHub) and self-contained HTML sheets, drawn by
   **`render_svg.py`** straight from the strand JSON, no OpenStrandStudio needed.
+  The drawing itself is `src/oss_svg.py`, a port of OpenStrandStudio's strand,
+  attached-strand and mask drawing that **`test_oss_svg.py`** pixel-checks
+  against OpenStrandStudio.
 
 ## The one-paragraph version
 

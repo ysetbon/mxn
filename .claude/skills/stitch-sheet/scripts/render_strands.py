@@ -1,5 +1,17 @@
-"""Render an mxn continuation JSON state into a standalone SVG (no Qt needed)."""
+"""Render an mxn continuation JSON state into a standalone SVG (no Qt needed).
+
+Strands, attached strands and masks are drawn by the repo's ``src/oss_svg.py``,
+a line-for-line SVG port of OpenStrandStudio's drawing, so the sheet looks
+exactly like the same JSON opened in OpenStrandStudio (only the colours are
+swapped for the deterministic palette below).
+"""
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'src')))
+import oss_svg  # noqa: E402
 
 
 def _rgb(c):
@@ -50,14 +62,8 @@ def load_strands(path):
 
 
 def bounds(strands, pad=70):
-    xs, ys = [], []
-    for s in strands:
-        if s['type'] == 'MaskedStrand':
-            continue
-        for p in (s['start'], s['end']):
-            xs.append(p['x'])
-            ys.append(p['y'])
-    return (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+    x0, y0, x1, y1 = oss_svg.strand_bounds(strands)
+    return (x0 - pad, y0 - pad, x1 + pad, y1 + pad)
 
 
 def _line(s):
@@ -67,7 +73,6 @@ def _line(s):
 def render(path, label=None, show_names=True, size=520, view=None, idp='',
            label_suffixes=('_4', '_5'), label_at='end'):
     strands = load_strands(path)
-    by_name = {s['layer_name']: s for s in strands}
     x0, y0, x1, y1 = view or bounds(strands)
     w, h = x1 - x0, y1 - y0
 
@@ -76,82 +81,11 @@ def render(path, label=None, show_names=True, size=520, view=None, idp='',
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" '
         f'width="100%" style="max-width:{size}px;height:auto;display:block">'
     )
-
-    # masks: white band along the "second" strand of each MaskedStrand
-    out.append('<defs>')
-    for s in strands:
-        if s['type'] != 'MaskedStrand':
-            continue
-        second = by_name.get(s['second_selected_strand'])
-        if second is None:
-            continue
-        ax, ay, bx, by = _line(second)
-        bw = second['width'] + 2 * second['stroke_width']
-        mid = s['layer_name']
-        out.append(
-            f'<mask id="{idp}m_{mid}" maskUnits="userSpaceOnUse" x="{x0:.1f}" y="{y0:.1f}" '
-            f'width="{w:.1f}" height="{h:.1f}">'
-            f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{w:.1f}" height="{h:.1f}" fill="black"/>'
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="white" stroke-width="{bw}" stroke-linecap="butt"/></mask>'
-        )
-    out.append('</defs>')
-
-    def draw_body(s, mask=None):
-        ax, ay, bx, by = _line(s)
-        col = _rgb(s['color'])
-        sw = s['stroke_width']
-        wid = s['width']
-        attr = ' mask="url(#%sm_%s)"' % (idp, mask) if mask else ''
-        g = '<g%s>' % attr
-        parts = [g]
-        # attachment circles
-        for i, has in enumerate(s.get('has_circles', [False, False])):
-            if not has:
-                continue
-            cx, cy = (ax, ay) if i == 0 else (bx, by)
-            parts.append(
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid / 2 + sw:.2f}" fill="black"/>'
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{wid / 2:.2f}" fill="{col}"/>'
-            )
-        parts.append(
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="black" stroke-width="{wid + 2 * sw}" stroke-linecap="butt"/>'
-        )
-        parts.append(
-            f'<line x1="{ax:.2f}" y1="{ay:.2f}" x2="{bx:.2f}" y2="{by:.2f}" '
-            f'stroke="{col}" stroke-width="{wid}" stroke-linecap="butt"/>'
-        )
-        parts.append('</g>')
-        return ''.join(parts)
-
-    def is_cont(s):
-        """Continuation layer? For a mask, decided by its member strands - the
-        mask's own name can't be split on '_' once set numbers reach 4 and 5
-        (e.g. the base mask 5_3_4_2 is not a _4/_5 mask)."""
-        if s['type'] == 'MaskedStrand':
-            members = (s.get('first_selected_strand', ''), s.get('second_selected_strand', ''))
-            return any(mm.endswith(('_4', '_5')) for mm in members)
-        return s['layer_name'].endswith(('_4', '_5'))
-
-    # Paint order: base strands -> base masks -> _4/_5 strands -> _4/_5 masks,
-    # so the _2/_3 masks stay UNDER the continuation.
-    def emit(want_cont, masked):
-        for s in strands:
-            name = s['layer_name']
-            if (s['type'] == 'MaskedStrand') != masked or is_cont(s) != want_cont:
-                continue
-            if not masked:
-                out.append(draw_body(s))
-                continue
-            first = by_name.get(s['first_selected_strand'])
-            if first is not None:
-                out.append(draw_body(first, mask=name))
-
-    emit(want_cont=False, masked=False)   # 1. _1 / _2 / _3
-    emit(want_cont=False, masked=True)    # 2. their masks
-    emit(want_cont=True, masked=False)    # 3. _4 / _5
-    emit(want_cont=True, masked=True)     # 4. _4/_5 masks
+    # OpenStrandStudio's paint order is the loaded layer order (the JSON's
+    # `index` slots), which already puts the base masks under `_4/_5`.
+    defs, body = oss_svg.draw_strands(strands, idp=idp + 'm_')
+    out.append(f'<defs>{defs}</defs>')
+    out.append(body)
 
     # 3. labels on the free ends of the continuation strands
     if show_names:
