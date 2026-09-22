@@ -11,6 +11,7 @@ import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+from jev_settings import JevSettings
 from native_renderer import NativeRenderer, validate
 from workflow import Workflow
 
@@ -18,6 +19,7 @@ PORT = 5174
 ROOT = Path(__file__).resolve().parent
 HOSTED_ORIGIN = 'https://mxn-strand-studio.topspin-tech-0568.chatgpt.site'
 JOBS = queue.Queue(maxsize=3)
+JEV = JevSettings()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -66,12 +68,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply(403, {'error': 'Origin not allowed'})
         if urlsplit(self.path).path == '/api/health':
             return self.reply(200, {'renderer': 'OpenStrandStudio', 'animals': True})
+        if urlsplit(self.path).path == '/api/jev':
+            return self.reply(200, JEV.status())
         return super().do_GET()
 
     def do_POST(self):
         if not self.allowed():
             return self.reply(403, {'error': 'Origin not allowed'})
-        if self.path not in ('/api/render', '/api/workflow'):
+        if self.path not in ('/api/render', '/api/workflow', '/api/jev'):
             return self.reply(404, {'error': 'Not found'})
         try:
             if self.headers.get_content_type() != 'application/json':
@@ -80,6 +84,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not 0 < size <= 16384:
                 raise ValueError('Invalid request size')
             request = json.loads(self.rfile.read(size))
+            if self.path == '/api/jev':
+                return self.reply(200, JEV.update(request))
             if self.path == '/api/render':
                 request = validate(request)
             response = queue.Queue(maxsize=1)
@@ -97,7 +103,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main():
     renderer = NativeRenderer()
-    workflow = Workflow(renderer)
+    workflow = Workflow(renderer, JEV)
     server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()

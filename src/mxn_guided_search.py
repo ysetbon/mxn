@@ -383,10 +383,10 @@ class HeuristicPolicy:
 
 
 class _JevClientMixin:
-    def __init__(self, client=None, model=None, timeout=30.0):
+    def __init__(self, client=None, model=None, timeout=30.0, api_key=None):
         if client is None:
             from typesafe_sdk import TypeSafeClient
-            client = TypeSafeClient(model=model, timeout=timeout)
+            client = TypeSafeClient(api_key=api_key, model=model, timeout=timeout)
         self.client = client
         self.calls = 0
         self.input_tokens = 0
