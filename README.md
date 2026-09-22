@@ -52,6 +52,17 @@ Use **Back to Starting stitch** to return to the original setup and canvas. The 
 
 See [the web workspace README](site/README.md) for implementation details and verification notes.
 
+## Guided alignment search (experimental)
+
+The alignment step normally evaluates every pair-extension combination against every angle. `src/mxn_guided_search.py` adds an optional guided mode: the grid is split into cells (one extension band per opposite pair × one third of the angle window), a policy picks the next cell from what earlier cells produced, and only that cell is evaluated — with the same validity math. If the guided phase finds nothing within its budget, the exhaustive search runs as before, so results are never worse than "not found".
+
+Two policies are available:
+
+- `heuristic` — deterministic, offline: probes around the closest result so far, shortest arms first. Useful as a baseline.
+- `jev` — asks [TypeSafe's Jev model](https://typesafe.ai) one `Choice` per pair (which extension band next) plus one for the angle third, and a `Noul` "stop now?" once a valid alignment exists. Needs `pip install typesafe-sdk` and `TYPESAFE_API_KEY` in the environment; if either is missing the exhaustive search runs.
+
+Enable with `MXN_ALIGNMENT_GUIDED=jev` (or `heuristic`) for the desktop app, web workspace and CLIs, or pass `guided_search=` to `align_horizontal_strands_parallel` / `align_vertical_strands_parallel`. Tuning: `MXN_ALIGNMENT_GUIDED_BUDGET` (fraction of combos, default 0.35), `MXN_ALIGNMENT_GUIDED_BANDS` (default 4), `MXN_ALIGNMENT_GUIDED_ROUNDS` (default 40), `MXN_ALIGNMENT_GUIDED_STOP` (stop probability threshold, default 0.6). Alignment results carry a `search` entry describing which mode ran and how many combos it evaluated.
+
 ## Tests
 
 From the repository root:

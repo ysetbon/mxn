@@ -2879,6 +2879,18 @@ def _evaluate_cpu_combo_chunk(task):
     This keeps the validity math unchanged; the only difference is that multiple
     combo ranges can now run in parallel worker processes.
     """
+    combo_start, combo_end = task[5], task[6]
+    return _evaluate_combo_indices(task, range(combo_start, combo_end))
+
+
+def _evaluate_combo_indices(task, combo_indices, angle_fraction=None):
+    """
+    Evaluate an explicit set of combo indices with the existing validity math.
+
+    `angle_fraction` (lo, hi) in [0, 1] narrows each combo's angle window to that
+    slice of it, so a guided search can probe part of a window without changing
+    what counts as valid.
+    """
     (
         strands_list,
         pair_indices,
@@ -2904,8 +2916,10 @@ def _evaluate_cpu_combo_chunk(task):
     best_fallback_worst_gap = -float("inf")
     best_fallback_extensions = tuple(0 for _ in pair_indices)
     best_fallback_angle = 0.0
+    combos_evaluated = 0
 
-    for combo_index in range(combo_start, combo_end):
+    for combo_index in combo_indices:
+        combos_evaluated += 1
         combo = _decode_combo_index(combo_index, ext_range_values, len(pair_indices))
 
         for pair_idx, (left_idx, right_idx) in enumerate(pair_indices):
@@ -2935,6 +2949,11 @@ def _evaluate_cpu_combo_chunk(task):
                 for strand in working_strands
             ]
             _, angle_min_deg, angle_max_deg, _ = _compute_pair_angle_range(adapted, angle_mode, num_opposite_pairs=num_opposite_pairs)
+
+        if angle_fraction is not None:
+            lo_frac, hi_frac = angle_fraction
+            span = angle_max_deg - angle_min_deg
+            angle_min_deg, angle_max_deg = angle_min_deg + span * lo_frac, angle_min_deg + span * hi_frac
 
         angles_deg_list = _build_angle_values(angle_min_deg, angle_max_deg, angle_step_degrees)
         np_result = _numpy_try_all_angles(
@@ -2975,6 +2994,7 @@ def _evaluate_cpu_combo_chunk(task):
     return {
         "chunk_start": combo_start,
         "chunk_end": combo_end,
+        "combos_evaluated": combos_evaluated,
         "valid_results": valid_results,
         "best_fallback": best_fallback,
         "best_fallback_worst_gap": best_fallback_worst_gap,
@@ -3286,6 +3306,81 @@ def _search_combo_space_cpu(
     )
 
 
+def _resolve_guided_search(spec, total_combos):
+    """
+    Turn the `guided_search` argument (or MXN_ALIGNMENT_GUIDED) into a policy,
+    or None to run the exhaustive search only. A policy that cannot be built
+    (missing SDK, missing TYPESAFE_API_KEY) degrades to the exhaustive search.
+    """
+    if spec is None:
+        spec = os.environ.get("MXN_ALIGNMENT_GUIDED", "")
+    try:
+        from mxn_guided_search import MIN_COMBOS_FOR_GUIDED, make_policy
+        policy = make_policy(spec)
+    except Exception as error:
+        print(f"        WARNING: guided search unavailable ({error}); using exhaustive search.")
+        return None
+    if policy is not None and total_combos < MIN_COMBOS_FOR_GUIDED:
+        return None
+    return policy
+
+
+def _guided_problem(axis, m, n, k, direction, num_strands, strand_width,
+                    max_pair_extension, pair_extension_step, angle_min, angle_max, angle_step):
+    return {
+        "axis": axis,
+        "m": m,
+        "n": n,
+        "k": k,
+        "direction": direction,
+        "num_strands": num_strands,
+        "strand_width_px": strand_width,
+        "valid_gap_px": [strand_width + 10, strand_width * 1.5],
+        "extension_grid_px": {"min": 0, "max": max_pair_extension, "step": pair_extension_step},
+        "angle_window_deg": [round(angle_min, 2), round(angle_max, 2)],
+        "angle_step_deg": angle_step,
+    }
+
+
+def _guided_search_info(summary):
+    if summary is None:
+        return {"mode": "exhaustive"}
+    if summary["valid_results"]:
+        return dict(summary["info"], mode="guided")
+    return {"mode": "exhaustive", "guided_attempt": summary["info"]}
+
+
+def _run_guided_combo_search(policy, strands_list, pairs, pair_directions, pair_originals,
+                             ext_range_values, angle_step_degrees, max_extension, strand_width,
+                             custom_angle_min, custom_angle_max, angle_mode, num_opposite_pairs,
+                             direction_type, problem, on_config_callback=None):
+    """Run the policy-guided cell search on this group with the exact chunk evaluator."""
+    from mxn_guided_search import guided_combo_search, options_from_env
+
+    pair_indices = _encode_pair_indices(strands_list, pairs)
+    label = f"{direction_type[0].upper()} guided[{policy.name}]"
+
+    def evaluate_cell(combo_indices, angle_fraction):
+        task = (
+            strands_list, pair_indices, pair_directions, pair_originals, ext_range_values,
+            0, 0, angle_step_degrees, max_extension, strand_width,
+            custom_angle_min, custom_angle_max, angle_mode, num_opposite_pairs,
+        )
+        return _evaluate_combo_indices(task, combo_indices, angle_fraction)
+
+    summary = guided_combo_search(
+        evaluate_cell, ext_range_values, len(pairs), policy,
+        problem=problem,
+        log=lambda line: print(f"        {label} {line}"),
+        **options_from_env(),
+    )
+
+    if on_config_callback:
+        for result in summary["valid_results"]:
+            on_config_callback(result["angle_degrees"], result["pair_extensions"], result, direction_type)
+    return summary
+
+
 def align_horizontal_strands_parallel(all_strands, n,
                                        angle_step_degrees=0.5,
                                        max_extension=100.0, strand_width=46,
@@ -3296,7 +3391,8 @@ def align_horizontal_strands_parallel(all_strands, n,
                                        m=None, k=0, direction="cw",
                                        use_gpu=False,
                                        angle_mode="first_strand",
-                                       prefer_short_arms=True):
+                                       prefer_short_arms=True,
+                                       guided_search=None):
     """
     Parallel alignment of horizontal _4/_5 strands using first-last pair approach.
 
@@ -3516,8 +3612,41 @@ def align_horizontal_strands_parallel(all_strands, n,
             "message": combo_guard["message"],
         }
 
-    # === GPU or CPU combo search ===
-    if can_use_gpu:
+    # === Guided (policy-driven) search first, then the exhaustive GPU or CPU search ===
+    guided_policy = _resolve_guided_search(guided_search, total_combos)
+    guided_summary = None
+    if guided_policy is not None:
+        print(f"        H search: guided[{guided_policy.name}], {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
+        guided_summary = _run_guided_combo_search(
+            guided_policy,
+            horizontal_strands,
+            pairs,
+            pair_directions,
+            pair_originals,
+            ext_range_values,
+            angle_step_degrees,
+            max_extension,
+            strand_width,
+            custom_angle_min if use_custom_h else None,
+            custom_angle_max if use_custom_h else None,
+            angle_mode,
+            v_num_opposite_pairs,
+            "horizontal",
+            _guided_problem("horizontal", m, n, k, direction, num_strands, strand_width,
+                            max_pair_extension, pair_extension_step,
+                            base_angle_min, base_angle_max, angle_step_degrees),
+            on_config_callback=on_config_callback,
+        )
+    search_info = _guided_search_info(guided_summary)
+
+    if guided_summary is not None and guided_summary["valid_results"]:
+        all_valid_results = guided_summary["valid_results"]
+        best_fallback = guided_summary["best_fallback"]
+        best_fallback_worst_gap = guided_summary["best_fallback_worst_gap"]
+        best_fallback_extensions = guided_summary["best_fallback_extensions"]
+        best_fallback_angle = guided_summary["best_fallback_angle"]
+        combo_count = guided_summary["combos_evaluated"]
+    elif can_use_gpu:
         print(f"        H search: GPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             horizontal_strands, pairs, pair_directions, pair_originals,
@@ -3588,7 +3717,8 @@ def align_horizontal_strands_parallel(all_strands, n,
             "pair_extensions": best_pair_extensions,
             "min_gap": best_result.get("min_gap", strand_width),
             "max_gap": best_result.get("max_gap", strand_width * 1.5),
-            "message": f"Found parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})"
+            "message": f"Found parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})",
+            "search": search_info,
         }
     elif best_fallback:
         # Return best fallback candidate (max-min: the one with maximum worst gap)
@@ -3613,7 +3743,8 @@ def align_horizontal_strands_parallel(all_strands, n,
             "pair_extensions": best_fallback_extensions,
             "min_gap": best_fallback.get("min_gap", strand_width),
             "max_gap": best_fallback.get("max_gap", strand_width * 1.5),
-            "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)"
+            "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)",
+            "search": search_info,
         }
     else:
         print(f"\n=== No Solution Found ===")
@@ -3634,7 +3765,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
                                      k=0, direction="cw",
                                      use_gpu=False,
                                      angle_mode="first_strand",
-                                     prefer_short_arms=True):
+                                     prefer_short_arms=True,
+                                     guided_search=None):
     """
     Parallel alignment of vertical _4/_5 strands using first-last pair approach.
 
@@ -3862,8 +3994,41 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "message": combo_guard["message"],
         }
 
-    # === GPU or CPU combo search ===
-    if can_use_gpu:
+    # === Guided (policy-driven) search first, then the exhaustive GPU or CPU search ===
+    guided_policy = _resolve_guided_search(guided_search, total_combos)
+    guided_summary = None
+    if guided_policy is not None:
+        print(f"        V search: guided[{guided_policy.name}], {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
+        guided_summary = _run_guided_combo_search(
+            guided_policy,
+            vertical_strands,
+            pairs,
+            pair_directions,
+            pair_originals,
+            ext_range_values,
+            angle_step_degrees,
+            max_extension,
+            strand_width,
+            custom_angle_min if use_custom_v else None,
+            custom_angle_max if use_custom_v else None,
+            angle_mode,
+            h_num_opposite_pairs,
+            "vertical",
+            _guided_problem("vertical", m, n, k, direction, num_strands, strand_width,
+                            max_pair_extension, pair_extension_step,
+                            base_angle_min, base_angle_max, angle_step_degrees),
+            on_config_callback=on_config_callback,
+        )
+    search_info = _guided_search_info(guided_summary)
+
+    if guided_summary is not None and guided_summary["valid_results"]:
+        all_valid_results = guided_summary["valid_results"]
+        best_fallback = guided_summary["best_fallback"]
+        best_fallback_worst_gap = guided_summary["best_fallback_worst_gap"]
+        best_fallback_extensions = guided_summary["best_fallback_extensions"]
+        best_fallback_angle = guided_summary["best_fallback_angle"]
+        combo_count = guided_summary["combos_evaluated"]
+    elif can_use_gpu:
         print(f"        V search: GPU, {total_combos:,} combos ({len(ext_range_values)} ext x {num_pairs} pairs)")
         all_valid_results, gpu_fallback = _cupy_search_combo_chunks(
             vertical_strands, pairs, pair_directions, pair_originals,
@@ -3934,7 +4099,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "pair_extensions": best_pair_extensions,
             "min_gap": best_result.get("min_gap", strand_width),
             "max_gap": best_result.get("max_gap", strand_width * 1.5),
-            "message": f"Found vertical parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})"
+            "message": f"Found vertical parallel configuration at {best_result['angle_degrees']:.2f}° (pair exts: {best_pair_extensions})",
+            "search": search_info,
         }
     elif best_fallback:
         # Return best fallback candidate (max-min: the one with maximum worst gap)
@@ -3959,7 +4125,8 @@ def align_vertical_strands_parallel(all_strands, n, m,
             "pair_extensions": best_fallback_extensions,
             "min_gap": best_fallback.get("min_gap", strand_width),
             "max_gap": best_fallback.get("max_gap", strand_width * 1.5),
-            "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)"
+            "message": f"Fallback: best candidate at {best_fallback_angle:.2f}° (worst gap: {best_fallback_worst_gap:.1f}px)",
+            "search": search_info,
         }
     else:
         print(f"\n=== No Solution Found ===")
