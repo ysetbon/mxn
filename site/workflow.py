@@ -105,23 +105,21 @@ class Workflow:
         reports = []
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             if action == 'align':
-                for axis, fn, args in [('h', module.align_horizontal_strands_parallel, (p['n'],)),
-                                       ('v', module.align_vertical_strands_parallel, (p['n'], p['m']))]:
-                    kwargs = dict(angle_step_degrees=.5, max_extension=100.,
-                                  custom_angle_min=options.get(axis+'Min') if mode == 'custom' else None,
-                                  custom_angle_max=options.get(axis+'Max') if mode == 'custom' else None,
-                                  max_pair_extension=maximum, pair_extension_step=step,
-                                  k=p['k'], direction=direction, use_gpu=False,
-                                  angle_mode='first_strand' if mode == 'custom' else mode)
-                    if axis == 'h':
-                        kwargs['m'] = p['m']
-                    result = fn(strands, *args, **kwargs)
-                    if result.get('success') or result.get('is_fallback'):
-                        strands = module.apply_parallel_alignment(strands, result)
+                def group_options(axis):
+                    return dict(angle_step_degrees=.5, max_extension=100.,
+                                custom_angle_min=options.get(axis+'Min') if mode == 'custom' else None,
+                                custom_angle_max=options.get(axis+'Max') if mode == 'custom' else None,
+                                max_pair_extension=maximum, pair_extension_step=step, use_gpu=False,
+                                angle_mode='first_strand' if mode == 'custom' else mode)
+                strands, h_result, v_result, level = module.align_level_parallel(
+                    strands, p['n'], p['m'], k=p['k'], direction=direction,
+                    h_options=group_options('h'), v_options=group_options('v'))
+                for axis, result in (('h', h_result), ('v', v_result)):
                     reports.append(dict(axis=axis, success=bool(result.get('success')),
                                         fallback=bool(result.get('is_fallback')),
                                         message=result.get('message', result.get('reason', '')),
-                                        angle=result.get('angle_degrees'), gap=result.get('average_gap')))
+                                        angle=result.get('angle_degrees'), gap=result.get('average_gap'),
+                                        passes=level['passes']))
             _set_active_strands(data, strands)
             if action == 'display':
                 for name in ('animals', 'names', 'transparent', 'scale'):
