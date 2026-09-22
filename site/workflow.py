@@ -10,9 +10,21 @@ from collections import OrderedDict
 from ui_utils import _get_active_strands, _set_active_strands
 
 
+def search_report(search):
+    """The part of an alignment's search info the page shows: mode, policy and Jev usage."""
+    if not isinstance(search, dict):
+        return {'mode': 'exhaustive'}
+    attempt = search.get('guided_attempt') or {}
+    info = search if search.get('mode') == 'guided' else attempt
+    return {'mode': search.get('mode', 'exhaustive'), 'policy': info.get('policy'),
+            'calls': info.get('policy_calls'), 'inputTokens': info.get('policy_input_tokens'),
+            'evaluated': info.get('combos_evaluated'), 'total': info.get('combos_total')}
+
+
 class Workflow:
-    def __init__(self, renderer):
+    def __init__(self, renderer, jev=None):
         self.renderer = renderer
+        self.jev = jev
         self.snapshots = OrderedDict()
 
     def save(self, result):
@@ -110,7 +122,8 @@ class Workflow:
                                 custom_angle_min=options.get(axis+'Min') if mode == 'custom' else None,
                                 custom_angle_max=options.get(axis+'Max') if mode == 'custom' else None,
                                 max_pair_extension=maximum, pair_extension_step=step, use_gpu=False,
-                                angle_mode='first_strand' if mode == 'custom' else mode)
+                                angle_mode='first_strand' if mode == 'custom' else mode,
+                                guided_search=self.jev.policy() if self.jev else None)
                 strands, h_result, v_result, level = module.align_level_parallel(
                     strands, p['n'], p['m'], k=p['k'], direction=direction,
                     h_options=group_options('h'), v_options=group_options('v'))
@@ -119,7 +132,7 @@ class Workflow:
                                         fallback=bool(result.get('is_fallback')),
                                         message=result.get('message', result.get('reason', '')),
                                         angle=result.get('angle_degrees'), gap=result.get('average_gap'),
-                                        passes=level['passes']))
+                                        passes=level['passes'], search=search_report(result.get('search'))))
             _set_active_strands(data, strands)
             if action == 'display':
                 for name in ('animals', 'names', 'transparent', 'scale'):
