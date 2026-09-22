@@ -76,4 +76,10 @@ From the repository root:
 python -m unittest discover -s site -p test_native_renderer.py
 ```
 
-The tests cover native rendering, animal-marker toggles, rotation indicators, continuation snapshots, manual extensions, and agreement with the original alignment solver.
+The Qt-free SVG renderer used by the documentation and the stitch-sheet skill (`src/oss_svg.py`) is pixel-checked against OpenStrandStudio's own drawing with:
+
+```bash
+python -m unittest continuation/test_oss_svg.py
+```
+
+The native renderer tests cover native rendering, animal-marker toggles, rotation indicators, continuation snapshots, manual extensions, and agreement with the original alignment solver.
