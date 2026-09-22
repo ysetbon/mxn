@@ -56,12 +56,13 @@ See [the web workspace README](site/README.md) for implementation details and ve
 
 The alignment step normally evaluates every pair-extension combination against every angle. `src/mxn_guided_search.py` adds an optional guided mode: the grid is split into cells (one extension band per opposite pair × one third of the angle window), a policy picks the next cell from what earlier cells produced, and only that cell is evaluated — with the same validity math. If the guided phase finds nothing within its budget, the exhaustive search runs as before, so results are never worse than "not found".
 
-Two policies are available:
+Three policies are available:
 
+- `jev` — [TypeSafe's Jev model](https://typesafe.ai) as the loop's strategist. It sees the group's geometry (strand order, each strand's start, target and extension direction, every gap at the best or closest configuration with its status against the 56–69 px rule) and each round answers, in one request: a strategy (`refine` a step from the anchor, `explore` a new band cell, or `stop`), per pair `shorter` / `keep` / `longer` plus a step size, the angle third, and band preferences for exploring. A refine evaluates the exact neighbourhood around the proposed point; an explore evaluates the top-ranked unexplored cell. Needs `pip install typesafe-sdk` and `TYPESAFE_API_KEY` in the environment; if either is missing the exhaustive search runs.
+- `jev-bands` — the first Jev policy: only a band per pair, the angle third and a "stop now?" `Noul`. Kept for comparison.
 - `heuristic` — deterministic, offline: probes around the closest result so far, shortest arms first. Useful as a baseline.
-- `jev` — asks [TypeSafe's Jev model](https://typesafe.ai) one `Choice` per pair (which extension band next) plus one for the angle third, and a `Noul` "stop now?" once a valid alignment exists. Needs `pip install typesafe-sdk` and `TYPESAFE_API_KEY` in the environment; if either is missing the exhaustive search runs.
 
-Enable with `MXN_ALIGNMENT_GUIDED=jev` (or `heuristic`) for the desktop app, web workspace and CLIs, or pass `guided_search=` to `align_horizontal_strands_parallel` / `align_vertical_strands_parallel`. Tuning: `MXN_ALIGNMENT_GUIDED_BUDGET` (fraction of combos, default 0.35), `MXN_ALIGNMENT_GUIDED_BANDS` (default 4), `MXN_ALIGNMENT_GUIDED_ROUNDS` (default 40), `MXN_ALIGNMENT_GUIDED_STOP` (stop probability threshold, default 0.6). Alignment results carry a `search` entry describing which mode ran and how many combos it evaluated.
+Enable with `MXN_ALIGNMENT_GUIDED=jev` (or `jev-bands`, `heuristic`) for the desktop app, web workspace and CLIs, or pass `guided_search=` to `align_horizontal_strands_parallel` / `align_vertical_strands_parallel`. Tuning: `MXN_ALIGNMENT_GUIDED_BUDGET` (fraction of combos, default 0.35), `MXN_ALIGNMENT_GUIDED_BANDS` (default 4), `MXN_ALIGNMENT_GUIDED_ROUNDS` (default 40), `MXN_ALIGNMENT_GUIDED_PATIENCE` (rounds without improvement before stopping, default 3), `MXN_ALIGNMENT_GUIDED_STOP` (stop probability threshold, default 0.6). Alignment results carry a `search` entry describing which mode ran, how many combos it evaluated and, for Jev, how many calls and input tokens it used.
 
 ## Tests
 

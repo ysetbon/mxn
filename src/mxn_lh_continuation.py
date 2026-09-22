@@ -3355,10 +3355,11 @@ def _run_guided_combo_search(policy, strands_list, pairs, pair_directions, pair_
                              custom_angle_min, custom_angle_max, angle_mode, num_opposite_pairs,
                              direction_type, problem, on_config_callback=None):
     """Run the policy-guided cell search on this group with the exact chunk evaluator."""
-    from mxn_guided_search import guided_combo_search, options_from_env
+    from mxn_guided_search import build_geometry, guided_combo_search, options_from_env
 
     pair_indices = _encode_pair_indices(strands_list, pairs)
     label = f"{direction_type[0].upper()} guided[{policy.name}]"
+    geometry = build_geometry(strands_list, pairs, strand_width + 10, strand_width * 1.5)
 
     def evaluate_cell(combo_indices, angle_fraction):
         task = (
@@ -3371,6 +3372,7 @@ def _run_guided_combo_search(policy, strands_list, pairs, pair_directions, pair_
     summary = guided_combo_search(
         evaluate_cell, ext_range_values, len(pairs), policy,
         problem=problem,
+        geometry=geometry,
         log=lambda line: print(f"        {label} {line}"),
         **options_from_env(),
     )
