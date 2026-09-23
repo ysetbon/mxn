@@ -19,7 +19,7 @@ When `/api/health` does not answer, `app.js` switches to the browser engine:
 - Preview and PNG export (1×/2×/4×, transparent or white) use the same bounds as `RenderMixin._calculate_strands_bounds`, with shadows off as in the desktop preview. JSON export is the generated history document.
 - Animal markers, strand labels and Continuation are disabled in this mode and need the local renderer. **Reconnect renderer** switches to it once it is running.
 
-The hosted Site has to be republished from `dist/` to pick up these files.
+`.github/workflows/site.yml` publishes `dist/` to GitHub Pages (https://ysetbon.github.io/mxn/) on every merge to `main`; the local renderer accepts that origin too. The private chatgpt.site copy has to be republished from ChatGPT by hand.
 
 ## Animal markers
 
@@ -32,7 +32,7 @@ The Animal markers switch controls the original `EmojiRenderer` PNG overlay and 
 - SVG export was removed: the previous browser approximation did not preserve native rendering.
 - Shadow behavior matches the MxN desktop preview (disabled there), rather than inventing different settings.
 - CPU alignment, angle ranges, and pair extensions are available on the Continuation page. GPU batches and exporting every solver attempt remain in the desktop application.
-- The loopback server accepts only the local workspace and this private Site's origin. Requests use bounded input sizes, validated generation options, a bounded queue, and an image pixel budget. It exposes no arbitrary file writes or Python evaluation API. Qt calls run serially on the main thread.
+- The loopback server accepts only the local workspace, the private chatgpt.site copy and the GitHub Pages origin. Requests use bounded input sizes, validated generation options, a bounded queue, and an image pixel budget. It exposes no arbitrary file writes or Python evaluation API. Qt calls run serially on the main thread.
 
 ## Verification
 

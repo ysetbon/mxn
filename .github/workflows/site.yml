@@ -1,0 +1,55 @@
+# CI for the web workspace on every PR, and CD to GitHub Pages on every push to
+# main (i.e. after each merge), plus on demand from the Actions tab.
+#
+# Live site: https://ysetbon.github.io/mxn/
+# One-time setup: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+name: Site
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Site tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Needs Qt and an OpenStrandStudio checkout, so test_native_renderer.py stays local.
+      - name: Browser generators match Python, Jev settings
+        working-directory: site
+        run: python -m unittest -v test_browser_generators test_jev_settings
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4

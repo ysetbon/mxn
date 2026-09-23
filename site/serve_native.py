@@ -17,7 +17,8 @@ from workflow import Workflow
 
 PORT = 5174
 ROOT = Path(__file__).resolve().parent
-HOSTED_ORIGIN = 'https://mxn-strand-studio.topspin-tech-0568.chatgpt.site'
+# The private chatgpt.site copy and the GitHub Pages deployment (.github/workflows/site.yml).
+HOSTED_ORIGINS = {'https://mxn-strand-studio.topspin-tech-0568.chatgpt.site', 'https://ysetbon.github.io'}
 JOBS = queue.Queue(maxsize=3)
 JEV = JevSettings()
 
@@ -32,7 +33,7 @@ class Handler(SimpleHTTPRequestHandler):
     def allowed(self):
         # Reject rebinding and cross-origin drive-by requests.
         hosts = {f'127.0.0.1:{PORT}', f'localhost:{PORT}'}
-        origins = {HOSTED_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
+        origins = HOSTED_ORIGINS | {f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
         return self.headers.get('Host') in hosts and self.headers.get('Origin', '') in origins | {''}
 
     def end_headers(self):
