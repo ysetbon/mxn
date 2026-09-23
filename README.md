@@ -6,7 +6,7 @@ Create M × N strand patterns, generate continuations from a k offset, and align
 
 **[Launch MxN Strand Studio](https://mxn-strand-studio.topspin-tech-0568.chatgpt.site)**
 
-The hosted site is currently private and requires authorized access. The Starting stitch page works on its own: without a local renderer, the pattern is generated in the browser and drawn by [OpenStrandJS](https://github.com/ysetbon/OpenStrandJS), the browser port of the OpenStrandStudio renderer. Animal markers, strand labels and the Continuation page need the Python renderer running on your computer (below); when it is running, the site uses it for everything.
+The hosted site is currently private and requires authorized access. The Starting stitch page works on its own: without a local renderer, the pattern is generated in the browser and drawn by [OpenStrandJS](https://github.com/ysetbon/OpenStrandJS), the browser port of the OpenStrandStudio renderer. Animal markers and strand labels are drawn in the browser too. The Continuation page needs the Python renderer running on your computer (below); when it is running, the site uses it for everything.
 
 ## Run locally
 
