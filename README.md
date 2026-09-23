@@ -48,7 +48,7 @@ Use **Back to Starting stitch** to return to the original setup and canvas. The 
 ## Rendering and limitations
 
 - With the local renderer, patterns use the actual OpenStrandStudio strand classes, masks, layer order, and Qt rendering pipeline.
-- Without it, `site/dist/generators.js` (a port of the four starting-stitch generators, checked against the Python output by `site/test_browser_generators.py`) builds the same JSON and a vendored copy of OpenStrandJS's `strand-renderer.js` draws it. Animal markers, strand labels and Continuation still run in Python.
+- Without it, `site/dist/generators.js` (a port of the four starting-stitch generators, checked against the Python output by `site/test_browser_generators.py`) builds the same JSON and a vendored copy of OpenStrandJS's `strand-renderer.js` draws it. `site/dist/markers.js` and `site/dist/continuation-engine.js` port the markers and the Continuation workflow, including the alignment search, which runs in Web Workers; each has a parity test against the Python code.
 - GPU batch workflows and exporting every alignment attempt remain in the desktop application.
 - Workflow snapshots are temporary. Reloading the browser or restarting the renderer requires generating the pattern again.
 
